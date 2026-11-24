@@ -56,8 +56,11 @@
   .pick button b { font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 24px; }
   .pick button small { color: var(--ink-soft); font-size: 14px; }
   .pick .next { font-size: 15px; }
+  .day-end { text-align: center; margin: -4px 0 10px; }
+  .day-end button { font: inherit; font-size: 17px; color: var(--ink); background: rgba(255,250,236,.55); border: 1px solid var(--ink); padding: 6px 16px; cursor: pointer; }
+  .day-end button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .you button { font: inherit; font-style: italic; color: var(--ink); background: none; border: 0; padding: 0 0 1px; margin-left: 6px; border-bottom: 1px solid var(--ink-soft); cursor: pointer; }
-  .sheet { position: absolute; inset: 0; background: rgba(239,227,200,.98); z-index: 6; display: flex; flex-direction: column; padding: 16px; gap: 10px; overflow-y: auto; }
+  .sheet { position: absolute; inset: 0; background: var(--parchment); z-index: 6; display: flex; flex-direction: column; padding: 16px; gap: 10px; overflow-y: auto; }
   .sheet header { padding: 0; display: flex; justify-content: space-between; align-items: baseline; }
   .sheet h2 { font-weight: 400; font-size: 26px; margin: 0; }
   .sheet .close { font: inherit; background: none; border: 0; border-bottom: 1px solid var(--ink-soft); cursor: pointer; color: var(--ink); }
@@ -108,6 +111,7 @@
   <div class="tray">
     <ol class="feed" id="feed" aria-live="polite"></ol>
     <p class="status" id="status"></p>
+    <p class="day-end" id="dayEnd" hidden><button type="button">Skip to midnight</button></p>
     <div class="cards" id="cards"></div>
   </div>
   <section class="pick" id="pick">
@@ -504,7 +508,7 @@ const FREE_LAND_KEPT = 0.25; // the crowd stops building once only this share of
 let crowdMoves = 0;
 function someoneMoves() {
   if (document.hidden) { setTimeout(someoneMoves, HIDDEN_RECHECK_MS); return; }
-  if (crowdMoves >= CROWD_MOVES_PER_DAY) { log('<span>The front has gone quiet. The island is decided at midnight.</span>', mySide || 'a'); return; }
+  if (crowdMoves >= CROWD_MOVES_PER_DAY) { log('<span>The front has gone quiet. The island is decided at midnight.</span>', mySide || 'a'); offerMidnight(); return; }
   crowdMoves++;
   const by = NAMES[Math.floor(crowd() * NAMES.length)], side = sideOf(by);
   const land = [...cells.values()].filter((c) => c.land);
@@ -755,8 +759,14 @@ canvas.addEventListener('pointerdown', (e) => {
   hand[picked].used = true; picked = null; hover = null;
   afterMove();
 });
+// Once the day has nothing left to do, offer its ending instead of a still map.
+function offerMidnight() {
+  const el = document.getElementById('dayEnd');
+  el.hidden = false; el.querySelector('button').onclick = openMidnight;
+}
 function afterMove() {
   const left = hand.filter((s) => !s.used).length;
+  if (!left) offerMidnight();
   statusEl.textContent = left ? `${myPoints} points for the ${SIDES[mySide].name.toLowerCase()} so far. ${left} left.` : `${myPoints} points today. The island is decided at midnight.`;
   renderCards();
 }
