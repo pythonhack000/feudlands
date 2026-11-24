@@ -176,7 +176,10 @@ function wouldCapture(c, side) {
 const STRENGTH = { camp: 1, tower: 3 };
 const ownNear = (c, side) => landNeighbours(c).filter((n) => n.side === side).length;
 const CRY_VOTES = 20, HOME = 1;
-const cryPower = (cry) => (cry ? Math.max(0, Math.floor(cry.votes / CRY_VOTES)) : 0);
+// A cry's strength is its score, minus the score of the best rebuttal the other side has posted under it.
+const rawPower = (x) => Math.max(0, Math.floor(x.votes / CRY_VOTES));
+const rebuttalOf = (cry) => (cry && cry.replies && cry.replies.length ? [...cry.replies].sort((x, y) => y.votes - x.votes)[0] : null);
+const cryPower = (cry) => (cry ? Math.max(0, rawPower(cry) - (rebuttalOf(cry) ? rawPower(rebuttalOf(cry)) : 0)) : 0);
 const canCharge = (c, side) => Boolean(c && c.land && c.side && c.side !== side && ownNear(c, side) > 0);
 const attackOf = (c, side, cry) => 1 + ownNear(c, side) + cryPower(cry);
 const defenceOf = (c) => STRENGTH[c.kind] + ownNear(c, c.side) + HOME;
@@ -392,6 +395,17 @@ function draw() {
       g.fillStyle = 'rgba(244,234,210,.97)'; g.fillRect(bx - bw / 2, by, bw, bh);
       g.strokeStyle = SIDES[b.side].ink; g.lineWidth = 1.2; g.strokeRect(bx - bw / 2, by, bw, bh);
       g.fillStyle = C.ink; lines.forEach((l, i) => g.fillText(l, bx, by + 6 + lh * (i + 0.8)));
+      // The defenders' rebuttal answers it a moment later, in their ink.
+      if (b.rebut && age > 650) {
+        const foe = b.rebut.side, rl = wrap('\u2014 ' + b.rebut.text, 26).slice(0, 4);
+        const rw = Math.max(...rl.map((l) => g.measureText(l).width)) + 16, rh = rl.length * lh + 10;
+        const rx = Math.min(Math.max(bx + 14, rw / 2 + 4), canvas.width / dpr - rw / 2 - 4), ry = by + bh + 4;
+        g.save(); g.globalAlpha = fade * Math.min(1, (age - 650) / 250);
+        g.fillStyle = 'rgba(244,234,210,.97)'; g.fillRect(rx - rw / 2, ry, rw, rh);
+        g.strokeStyle = SIDES[foe].ink; g.lineWidth = 1.2; g.strokeRect(rx - rw / 2, ry, rw, rh);
+        g.fillStyle = SIDES[foe].ink; rl.forEach((l, i) => g.fillText(l, rx, ry + 6 + lh * (i + 0.8)));
+        g.restore();
+      }
     }
     if (age > 900) { g.font = `${Math.round(size * 0.85)}px 'IM Fell English SC', serif`; g.textAlign = 'center'; g.fillStyle = b.won ? SIDES[b.side].ink : C.ink; g.fillText(b.won ? 'captured' : 'held', p.x, p.y + size * 1.55); }
     g.restore();
@@ -429,7 +443,7 @@ function wrap(text, width) { const out = []; let line = ''; for (const w of text
 const bestCry = (side) => [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[0] || null;
 function assault(c, side, by, cry) {
   const now = performance.now(), atk = attackOf(c, side, cry), def = defenceOf(c), won = atk > def, enemy = c.side;
-  battles.push({ c, side, at: now, cry, won, seed: Math.floor(now) });
+  battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won, seed: Math.floor(now) });
   if (won) {
     Object.assign(c, { side, kind: 'camp', by, flipAt: now + 900, label: null });
     const boxed = captures(side);
@@ -496,7 +510,7 @@ function someoneMoves() {
   if (pick) move(pick.c, crowd() < 0.15 ? 'tower' : 'camp', side, by);
   document.getElementById('here').textContent = String(27 + Math.floor(crowd() * 9));
   // The council never sleeps: someone upvotes an argument now and then.
-  if (crowd() < 0.7) { const a = args[Math.floor(crowd() * args.length)]; a.votes += 1 + Math.floor(crowd() * 3); syncRally(); }
+  if (crowd() < 0.7) { const a = args[Math.floor(crowd() * args.length)]; const target = a.replies.length && crowd() < 0.4 ? a.replies[0] : a; target.votes += 1 + Math.floor(crowd() * 3); syncRally(); }
   setTimeout(someoneMoves, 2200 + crowd() * 3000);
 }
 
@@ -579,7 +593,15 @@ const args = [
   { side: 'b', by: fightersOf('b')[1], text: 'A dog is happy to see you every single time. Every. Time.', votes: 27 },
   { side: 'a', by: fightersOf('a')[2], text: 'Quiet, clean, and judges your life choices for free.', votes: 12 },
   { side: 'b', by: fightersOf('b')[2], text: 'Try taking a cat on a hike.', votes: 9 },
-].map((a) => ({ ...a, vote: 0, taken: 0 }));
+].map((a) => ({ ...a, vote: 0, taken: 0, replies: [] }));
+// Rebuttals from the other side, threaded under each argument.
+[[0, 'The walk in the rain is the best part of the day. Ask any dog.', 26],
+ [1, 'Nobody has been rescued from a fire by a goldfish either. Not a job requirement.', 41],
+ [2, 'Dogs invented loyalty. Try running a forum without it.', 8],
+ [3, 'Happy to see you, the mailman, and a sock.', 19]].forEach(([i, text, votes]) => {
+  const a = args[i], side = a.side === 'a' ? 'b' : 'a';
+  a.replies.push({ side, by: fightersOf(side)[3 + (i % 2)], text, votes, vote: 0 });
+});
 const sideVotes = (side) => args.filter((a) => a.side === side).reduce((n, a) => n + Math.max(0, a.votes), 0);
 const reinforcements = (side) => Math.floor(sideVotes(side) / RALLY_EVERY);
 let grantedRally = 0;
@@ -592,7 +614,7 @@ function syncRally() {
 }
 function openCouncil() {
   const el = sheet(`<header><h2>War council</h2><button class="close" type="button">Back to the war</button></header>
-    <p>Argue for your side. Upvote what's true, downvote what's nonsense: an argument's score is its strength as a battle cry, and every ${RALLY_EVERY} points a side's arguments earn send each of its fighters an extra charge.</p>
+    <p>Argue for your side and rebut theirs. Upvote what's true, downvote what's nonsense. A rebuttal's score is taken off the cry it answers: an argument's score is its strength as a battle cry, and every ${RALLY_EVERY} points a side's arguments earn send each of its fighters an extra charge.</p>
     <div class="rally"></div>
     <div class="write"><input maxlength="120" placeholder="Why the ${SIDES[mySide].name.toLowerCase()} deserve the island" aria-label="Your argument" /><button class="vote" type="button">Post</button></div>
     <div class="council"></div>`);
@@ -612,12 +634,35 @@ function openCouncil() {
         if (dir > 0) box.insertAdjacentHTML('beforeend', `<span class="pct">${a.votes}</span>`);
       }
       row.append(box); list.append(row);
+      // The thread: the other side's rebuttals, and a way to add one.
+      const thread = document.createElement('div'); thread.style.cssText = 'margin:-4px 0 4px 22px;display:flex;flex-direction:column;gap:4px';
+      [...a.replies].sort((x, y) => y.votes - x.votes).slice(0, 2).forEach((r, k) => {
+        const rr = document.createElement('div'); rr.className = 'arg'; rr.style.borderColor = SIDES[r.side].ink; rr.style.fontSize = '15px';
+        rr.innerHTML = `<div style="flex:1"><span style="font-size:15px">${r.text.replace(/[<>&]/g, '')}</span><small>${r.by === 'you' ? 'you' : titled(r.by)}, for the ${SIDES[r.side].name.toLowerCase()}${k === 0 && rawPower(r) ? `, cuts this cry by ${rawPower(r)}` : ''}</small></div>`;
+        const vb = document.createElement('div'); vb.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
+        for (const dir of [1, -1]) {
+          const v = document.createElement('button'); v.className = 'vote'; v.type = 'button'; v.setAttribute('aria-pressed', String(r.vote === dir)); v.setAttribute('aria-label', dir > 0 ? 'Upvote rebuttal' : 'Downvote rebuttal'); v.textContent = dir > 0 ? '\u25B2' : '\u25BC';
+          v.onclick = () => { r.votes -= r.vote; r.vote = r.vote === dir ? 0 : dir; r.votes += r.vote; render(); };
+          vb.append(v); if (dir > 0) vb.insertAdjacentHTML('beforeend', `<span class="pct">${r.votes}</span>`);
+        }
+        rr.append(vb); thread.append(rr);
+      });
+      if (a.side !== mySide) {
+        const open = document.createElement('button'); open.className = 'chip'; open.type = 'button'; open.style.alignSelf = 'flex-start'; open.textContent = 'Rebut';
+        open.onclick = () => {
+          open.replaceWith(Object.assign(document.createElement('div'), { className: 'write', innerHTML: `<input maxlength="120" placeholder="Answer the ${SIDES[a.side].name.toLowerCase()}" aria-label="Your rebuttal" /><button class="vote" type="button">Post</button>` }));
+          const w = thread.querySelector('.write'); w.querySelector('input').focus();
+          w.querySelector('.vote').onclick = () => { const t = w.querySelector('input').value.trim(); if (!t) return; a.replies.push({ side: mySide, by: 'you', text: t, votes: 1, vote: 1 }); render(); };
+        };
+        thread.append(open);
+      }
+      list.append(thread);
     });
   };
   const input = el.querySelector('input');
   el.querySelector('.write .vote').onclick = () => {
     const text = input.value.trim(); if (!text) return;
-    args.push({ side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0 }); input.value = ''; render(); syncRally();
+    args.push({ side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0, replies: [] }); input.value = ''; render(); syncRally();
   };
   render();
 }
@@ -704,14 +749,14 @@ function openCry(target, slotIndex) {
   const list = el.querySelector('.council');
   el.querySelector('.write .vote').onclick = () => {
     const text = el.querySelector('.write input').value.trim(); if (!text) return;
-    const cry = { side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0 }; args.push(cry);
+    const cry = { side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0, replies: [] }; args.push(cry);
     el.remove(); myPoints += assault(target, mySide, 'you', cry); hand[slotIndex].used = true; picked = null; hover = null; afterMove();
   };
   const options = [...args].filter((a) => a.side === mySide).sort((x, y) => y.votes - x.votes).slice(0, 4);
   [...options, null].forEach((cry) => {
     const atk = attackOf(target, mySide, cry), wins = atk > def;
     const row = document.createElement('button'); row.type = 'button'; row.className = 'arg'; row.style.borderColor = SIDES[mySide].ink; row.style.textAlign = 'left'; row.style.font = 'inherit'; row.style.cursor = 'pointer'; row.style.color = 'inherit';
-    row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : titled(cry.by)}, ${cry.votes} points, +${cryPower(cry)}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${atk} vs ${def}</span>`;
+    row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : titled(cry.by)}, ${cry.votes} points, +${cryPower(cry)}${rebuttalOf(cry) && rawPower(rebuttalOf(cry)) ? ` (rebutted by ${titled(rebuttalOf(cry).by)}, \u2212${rawPower(rebuttalOf(cry))})` : ''}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${atk} vs ${def}</span>`;
     row.onclick = () => {
       el.remove();
       myPoints += assault(target, mySide, 'you', cry);
