@@ -56,6 +56,7 @@
   .pick button b { font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 24px; }
   .pick button small { color: var(--ink-soft); font-size: 14px; }
   .pick .next { font-size: 15px; }
+  .brag { display: flex; gap: 10px; align-items: baseline; margin-top: 6px !important; font-size: 13px !important; }
   .day-end { text-align: center; margin: -4px 0 10px; }
   .day-end button { font: inherit; font-size: 17px; color: var(--ink); background: rgba(255,250,236,.55); border: 1px solid var(--ink); padding: 6px 16px; cursor: pointer; }
   .day-end button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -801,6 +802,11 @@ function openCry(target, slotIndex) {
 // ---------- midnight: the day's result, pinned under the post ----------
 // What the day meant for you. A day you skipped still says how close it was, so tomorrow has a reason.
 const hexes = (n) => `${n} ${n === 1 ? 'hex' : 'hexes'}`;
+// In the real post Share drops this line as a comment under the day's post; here it goes to the clipboard.
+async function shareLine(text, statusEl) {
+  try { await navigator.clipboard.writeText(text); statusEl.textContent = `Copied: \u201c${text}\u201d`; }
+  catch { statusEl.textContent = `Copy this: \u201c${text}\u201d`; }
+}
 function yourDay(a, b, win) {
   const margin = Math.abs(a - b);
   if (!mySide) return { title: 'You sat this one out', line: margin ? `The ${SIDES[win].name.toLowerCase()} won by ${hexes(margin)}. Pick a side tomorrow.` : 'It ended dead even. One fighter would have settled it.' };
@@ -812,9 +818,9 @@ function yourDay(a, b, win) {
       ? { title: 'They won without you', line: `The ${name} held on by ${hexes(margin)}. Tomorrow, take your share of it.` }
       : { title: 'Your side needed you', line: `The ${name} lost by ${hexes(margin)}. Your pieces could have closed that.` };
   }
-  const tail = `${hexes(mine)} taken, ${myPoints} points. Rank: ${rankOf('you')[1]}.`;
-  if (won && mine >= margin) return { title: 'You were the margin', line: `The ${name} won by ${hexes(margin)} and you took ${mine}. ${myPoints} points. Rank: ${rankOf('you')[1]}.` };
-  return { title: 'Your day', line: tail };
+  const tail = `${hexes(mine)} taken, ${myPoints} points. Rank: ${rankOf('you')[1]}.`, sign = `Feudlands, day ${TODAY}`;
+  if (won && mine >= margin) return { title: 'You were the margin', line: `The ${name} won by ${hexes(margin)} and you took ${mine}. ${myPoints} points. Rank: ${rankOf('you')[1]}.`, share: `I was the margin: the ${name} won by ${hexes(margin)}. ${sign}` };
+  return { title: 'Your day', line: tail, share: mine ? `I took ${hexes(mine)} for the ${name}. ${sign}` : null };
 }
 function openMidnight() {
   hover = null; picked = null; draw();
@@ -830,8 +836,10 @@ function openMidnight() {
     <h2 style="color:${a === b ? C.ink : SIDES[win].ink}">${a === b ? 'The island is split, 50% to 50%' : `The ${SIDES[win].name.toLowerCase()} hold the island, ${pa}% to ${100 - pa}%`}</h2>
     <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken</small></div></div>
     <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
-    <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small></div></div>
+    <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share</button><span role="status"></span></p>` : ''}</div></div>
     <p>Tomorrow's feud: <em>Pineapple on pizza?</em></p>`);
+  const brag = el.querySelector('.brag');
+  if (brag) brag.querySelector('button').onclick = () => shareLine(day.share, brag.querySelector('span'));
   return el;
 }
 new ResizeObserver(() => { layout(); draw(); }).observe(canvas);
