@@ -45,10 +45,19 @@ function resolveOverHttps(hostname) {
 
 dns.lookup = function lookup(hostname, options, callback) {
   const done = typeof options === 'function' ? options : callback;
-  const opts = typeof options === 'object' && options !== null ? options : { family: options };
-  if (typeof hostname !== 'string' || !REDDIT_HOST.test(hostname)) {
-    return originalLookup.call(dns, hostname, options, callback);
+  const opts = typeof options === 'object' && options !== null ? options : typeof options === 'number' ? { family: options } : {};
+  if (typeof hostname !== 'string') return originalLookup.call(dns, hostname, options, callback);
+  if (!REDDIT_HOST.test(hostname)) {
+    // Other hosts go through the system first; if it can't find them (Reddit's asset bucket, for one), ask DoH.
+    return originalLookup.call(dns, hostname, opts, (error, ...rest) => {
+      if (!error || error.code !== 'ENOTFOUND') return done(error, ...rest);
+      answerOverHttps(hostname, opts, done);
+    });
   }
+  answerOverHttps(hostname, opts, done);
+};
+
+function answerOverHttps(hostname, opts, done) {
   resolveOverHttps(hostname).then(
     (addresses) => {
       if (opts.all) done(null, addresses.map((address) => ({ address, family: 4 })));
@@ -56,4 +65,4 @@ dns.lookup = function lookup(hostname, options, callback) {
     },
     (error) => done(error)
   );
-};
+}
