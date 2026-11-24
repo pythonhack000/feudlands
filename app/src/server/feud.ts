@@ -74,6 +74,9 @@ const SEED_ARGS: [string, Side, string, string, string | null, number][] = [
   ['s10', 'a', 'fernweh', 'Happy to see you, the mailman, and a sock.', 's4', 19],
 ];
 
+/** Every feud post, scored by when it opened, so midnight knows which days to close. */
+export const POSTS_KEY = 'feud:posts';
+
 const keys = (post: string) => {
   const k = (name: string) => `feud:${post}:${name}`;
   return {
@@ -89,8 +92,9 @@ export class Feud {
   private readonly store: Store;
   private readonly user: string | null;
   private readonly now: number;
+  private readonly post: string;
   constructor(store: Store, post: string, user: string | null, now = Date.now()) {
-    this.store = store; this.user = user; this.now = now; this.k = keys(post);
+    this.store = store; this.user = user; this.now = now; this.post = post; this.k = keys(post);
   }
 
   /** Everything after `after` in the log, plus the council and who you are. */
@@ -253,6 +257,7 @@ export class Feud {
 
   private async seed(): Promise<void> {
     if (!(await this.store.hSetNX(this.k.meta, 'seeded', '1'))) return;
+    await this.store.zAdd(POSTS_KEY, { member: this.post, score: this.now });
     const rows: Record<string, string> = {}, votes: Record<string, string> = {};
     for (const [id, side, by, text, parent, v] of SEED_ARGS) {
       rows[id] = JSON.stringify({ id, side, by, text, parent, at: this.now });

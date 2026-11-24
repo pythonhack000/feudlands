@@ -3,11 +3,10 @@ import { serve } from '@hono/node-server';
 import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
-import { Feud, resultsComment } from './feud.ts';
+import { Feud, POSTS_KEY, resultsComment } from './feud.ts';
 
 const FEUD_TITLE = 'Feudlands: Cats or dogs? Pick a side and take the island';
 
-const POSTS_KEY = 'feud:posts';
 /** Feuds older than this have had their midnight. */
 const OPEN_FOR_MS = 36 * 60 * 60 * 1000;
 

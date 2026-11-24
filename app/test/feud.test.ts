@@ -144,3 +144,10 @@ test('the results comment names the leader and the split', () => {
   assert.equal(text, '**Midnight, day 12: the cats hold the island, 60% to 40%** (30 hexes to 20).\n\n- General of the day: u/ann, 4 hexes taken\n- Cry of the day: “Meow” by u/ann, took 2 hexes\n- Sworn in: 3 for the cats, 2 for the dogs');
   assert.match(resultsComment({ a: 25, b: 25, sworn: { a: 1, b: 1 }, general: null, cry: null, hexes: {} }), /split, 50% to 50%/);
 });
+
+test('a feud signs up for midnight the first time anyone opens it', async () => {
+  const store = memoryStore();
+  await new Feud(store, 't3_abc', null, T0).state(0);
+  await new Feud(store, 't3_abc', null, T0 + 1).state(0);
+  assert.deepEqual(await store.zRange('feud:posts', 0, Number.MAX_SAFE_INTEGER, { by: 'score' }), [{ member: 't3_abc', score: T0 }]);
+});
