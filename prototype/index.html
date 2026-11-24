@@ -176,10 +176,18 @@ function wouldCapture(c, side) {
 const STRENGTH = { camp: 1, tower: 3 };
 const ownNear = (c, side) => landNeighbours(c).filter((n) => n.side === side).length;
 const CRY_VOTES = 20, HOME = 1;
-const cryPower = (cry) => (cry ? Math.floor(cry.votes / CRY_VOTES) : 0);
+const cryPower = (cry) => (cry ? Math.max(0, Math.floor(cry.votes / CRY_VOTES)) : 0);
 const canCharge = (c, side) => Boolean(c && c.land && c.side && c.side !== side && ownNear(c, side) > 0);
 const attackOf = (c, side, cry) => 1 + ownNear(c, side) + cryPower(cry);
 const defenceOf = (c) => STRENGTH[c.kind] + ownNear(c, c.side) + HOME;
+
+// ---------- ranks: earned by hexes taken, across all days ----------
+const RANKS = [[0, 'Recruit', 'Rct.'], [3, 'Private', 'Pvt.'], [8, 'Corporal', 'Cpl.'], [15, 'Sergeant', 'Sgt.'], [25, 'Captain', 'Capt.'], [40, 'General', 'Gen.']];
+const stats = {};
+const statOf = (name) => (stats[name] ||= { total: 0, today: 0 });
+const rankOf = (name) => [...RANKS].reverse().find(([min]) => statOf(name).total >= min);
+const titled = (name) => (name === 'you' ? 'you' : `${rankOf(name)[2]} u/${name}`);
+function credit(name, n) { const st = statOf(name); st.total += n; st.today += n; }
 
 // ---------- the morning so far: both sides already fighting ----------
 const NAMES = ['quietfox', 'tea_and_maps', 'mod_kettle', 'lofi_owl', 'pixelpuddle', 'oldsalt', 'fernweh', 'brick_by_brick', 'nightjar', 'cartographer_k', 'sundial', 'gravelpit'];
@@ -290,6 +298,8 @@ function generatedBanner(seed, side) {
 }
 const banners = { a: [], b: [] };
 const fightersOf = (side) => NAMES.filter((n) => sideOf(n) === side);
+// Veterans from earlier days.
+NAMES.forEach((n, i) => { statOf(n).total = [44, 31, 18, 27, 9, 12, 4, 21, 6, 2, 15, 0][i] || 0; });
 [34, 21, 9].forEach((votes, i) => banners.a.push({ by: fightersOf('a')[i], votes, voted: false, img: generatedBanner(11 + i * 7, 'a') }));
 [41, 17, 6].forEach((votes, i) => banners.b.push({ by: fightersOf('b')[i], votes, voted: false, img: generatedBanner(5 + i * 13, 'b') }));
 const flying = (side) => banners[side].reduce((top, b) => (b.votes > top.votes ? b : top));
@@ -352,7 +362,10 @@ function draw() {
     const p = center(c), age = c.bornAt ? now - c.bornAt : Infinity, r = rng(c.q * 31 + c.r * 17);
     if (age < INK_MS) { const k = age / INK_MS; g.save(); g.globalAlpha = k; g.translate(p.x, p.y); g.scale(.6 + .4 * k, .6 + .4 * k); g.translate(-p.x, -p.y); drawPiece(c.kind, c.side, p, size, r); g.restore(); }
     else drawPiece(c.kind, c.side, p, size, r);
-    if (c.by === 'you') { g.strokeStyle = C.ink; g.lineWidth = 1.1; g.beginPath(); g.ellipse(p.x, p.y, size * .95, size * .85, -0.2, 0.3, Math.PI * 2.05); g.stroke(); }
+    if (c.by === 'you') {
+      // Yours: the hex itself traced twice in ink, like a map maker's own claim.
+      for (const k of [0.92, 0.8]) { const cs = corners(c, size * k); g.strokeStyle = C.ink; g.lineWidth = k > .9 ? 1.6 : 0.9; g.beginPath(); cs.forEach((q, i) => (i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y))); g.closePath(); g.stroke(); }
+    }
   }
   // Labels over fresh builds and captures.
   for (const c of land) {
@@ -419,11 +432,14 @@ function assault(c, side, by, cry) {
   battles.push({ c, side, at: now, cry, won, seed: Math.floor(now) });
   if (won) {
     Object.assign(c, { side, kind: 'camp', by, flipAt: now + 900, label: null });
-    captures(side).forEach((f) => Object.assign(f, { side, flipAt: now + 1200, label: 'captured', by }));
+    const boxed = captures(side);
+    boxed.forEach((f) => Object.assign(f, { side, flipAt: now + 1200, label: 'captured', by }));
+    credit(by, 1 + boxed.length);
+    if (cry) { cry.taken = (cry.taken || 0) + 1 + boxed.length; credit(cry.by, 0); }
   }
-  const who = by === 'you' ? 'You' : 'u/' + by;
+  const who = by === 'you' ? 'You' : titled(by);
   log(`<span>${who} charged the ${SIDES[enemy].name.toLowerCase()}, ${atk} vs ${def}: ${won ? 'taken' : 'held'}</span><em>${won ? '+3' : '+0'}</em>`, side);
-  setTimeout(tally, 900); animate();
+  setTimeout(() => { tally(); showRank(); }, 900); animate();
   return won ? 3 : 0;
 }
 
@@ -455,12 +471,13 @@ function log(html, side) {
 }
 function move(c, kind, side, by) {
   const now = performance.now();
-  Object.assign(c, { side, kind, by, bornAt: now, label: by === 'you' ? 'you' : 'u/' + by });
+  Object.assign(c, { side, kind, by, bornAt: now, label: titled(by) });
   const flipped = captures(side);
   flipped.forEach((f) => Object.assign(f, { side, flipAt: now + 350, label: 'captured', by }));
-  const who = by === 'you' ? 'You' : 'u/' + by;
+  credit(by, flipped.length);
+  const who = by === 'you' ? 'You' : titled(by);
   log(flipped.length ? `<span>${who} took ${flipped.length} from the ${SIDES[side === 'a' ? 'b' : 'a'].name.toLowerCase()}</span><em>+${1 + flipped.length * 2}</em>` : `<span>${who} raised a ${KINDS[kind].name.toLowerCase()}</span><em>+1</em>`, side);
-  tally(); animate();
+  tally(); showRank(); animate();
   return 1 + flipped.length * 2;
 }
 // Other players look for the move that captures the most, else push the front line.
@@ -505,13 +522,20 @@ function renderCards() {
   });
 }
 
+function showRank() {
+  const el = document.getElementById('rank'); if (!el || !mySide) return;
+  const [, name] = rankOf('you'), next = RANKS.find(([min]) => min > statOf('you').total);
+  el.textContent = `${name} of the ${SIDES[mySide].name.toLowerCase()}${next ? `, ${next[0] - statOf('you').total} hexes to ${next[1]}` : ''}.`;
+}
+
 // ---------- choosing a side ----------
 document.querySelectorAll('#pick button').forEach((btn) => btn.addEventListener('click', () => {
   mySide = btn.dataset.side;
   document.getElementById('pick').remove();
   const you = document.getElementById('you');
-  you.textContent = `You fight for the ${SIDES[mySide].name.toLowerCase()}.`;
-  you.insertAdjacentHTML('beforeend', '<button type="button" id="openCouncil">War council</button><button type="button" id="openGallery">Banners</button><button type="button" id="openEasel">Draw one</button>');
+  you.innerHTML = '<span id="rank"></span><button type="button" id="openCouncil">War council</button><button type="button" id="openGallery">Banners</button><button type="button" id="openEasel">Draw one</button><button type="button" id="openMidnight">Midnight</button>';
+  document.getElementById('openMidnight').onclick = openMidnight;
+  showRank();
   document.getElementById('openGallery').onclick = openGallery;
   document.getElementById('openEasel').onclick = openEasel;
   document.getElementById('openCouncil').onclick = openCouncil;
@@ -555,8 +579,8 @@ const args = [
   { side: 'b', by: fightersOf('b')[1], text: 'A dog is happy to see you every single time. Every. Time.', votes: 27 },
   { side: 'a', by: fightersOf('a')[2], text: 'Quiet, clean, and judges your life choices for free.', votes: 12 },
   { side: 'b', by: fightersOf('b')[2], text: 'Try taking a cat on a hike.', votes: 9 },
-].map((a) => ({ ...a, voted: false }));
-const sideVotes = (side) => args.filter((a) => a.side === side).reduce((n, a) => n + a.votes, 0);
+].map((a) => ({ ...a, vote: 0, taken: 0 }));
+const sideVotes = (side) => args.filter((a) => a.side === side).reduce((n, a) => n + Math.max(0, a.votes), 0);
 const reinforcements = (side) => Math.floor(sideVotes(side) / RALLY_EVERY);
 let grantedRally = 0;
 function syncRally() {
@@ -568,7 +592,7 @@ function syncRally() {
 }
 function openCouncil() {
   const el = sheet(`<header><h2>War council</h2><button class="close" type="button">Back to the war</button></header>
-    <p>Argue for your side. Every ${RALLY_EVERY} upvotes on a side's arguments sends every one of its fighters an extra camp.</p>
+    <p>Argue for your side. Upvote what's true, downvote what's nonsense: an argument's score is its strength as a battle cry, and every ${RALLY_EVERY} points a side's arguments earn send each of its fighters an extra charge.</p>
     <div class="rally"></div>
     <div class="write"><input maxlength="120" placeholder="Why the ${SIDES[mySide].name.toLowerCase()} deserve the island" aria-label="Your argument" /><button class="vote" type="button">Post</button></div>
     <div class="council"></div>`);
@@ -578,16 +602,22 @@ function openCouncil() {
     list.innerHTML = '';
     [...args].sort((x, y) => y.votes - x.votes).forEach((a) => {
       const row = document.createElement('div'); row.className = 'arg'; row.style.borderColor = SIDES[a.side].ink;
-      row.innerHTML = `<div style="flex:1"><q>${a.text.replace(/[<>&]/g, '')}</q><small>${a.by === 'you' ? 'you' : 'u/' + a.by}, for the ${SIDES[a.side].name.toLowerCase()}</small></div>`;
-      const v = document.createElement('button'); v.className = 'vote'; v.type = 'button'; v.setAttribute('aria-pressed', String(a.voted)); v.textContent = `\u25B2 ${a.votes}`;
-      v.onclick = () => { a.voted = !a.voted; a.votes += a.voted ? 1 : -1; render(); syncRally(); };
-      row.append(v); list.append(row);
+      row.innerHTML = `<div style="flex:1"><q>${a.text.replace(/[<>&]/g, '')}</q><small>${a.by === 'you' ? 'you' : titled(a.by)}, for the ${SIDES[a.side].name.toLowerCase()}${a.taken ? `, has taken ${a.taken} ${a.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div>`;
+      const box = document.createElement('div'); box.style.display = 'flex'; box.style.flexDirection = 'column'; box.style.alignItems = 'center'; box.style.gap = '2px';
+      for (const dir of [1, -1]) {
+        const v = document.createElement('button'); v.className = 'vote'; v.type = 'button'; v.setAttribute('aria-pressed', String(a.vote === dir));
+        v.setAttribute('aria-label', dir > 0 ? 'Upvote' : 'Downvote'); v.textContent = dir > 0 ? '\u25B2' : '\u25BC';
+        v.onclick = () => { a.votes -= a.vote; a.vote = a.vote === dir ? 0 : dir; a.votes += a.vote; render(); syncRally(); };
+        box.append(v);
+        if (dir > 0) box.insertAdjacentHTML('beforeend', `<span class="pct">${a.votes}</span>`);
+      }
+      row.append(box); list.append(row);
     });
   };
   const input = el.querySelector('input');
   el.querySelector('.write .vote').onclick = () => {
     const text = input.value.trim(); if (!text) return;
-    args.push({ side: mySide, by: 'you', text, votes: 1, voted: true }); input.value = ''; render(); syncRally();
+    args.push({ side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0 }); input.value = ''; render(); syncRally();
   };
   render();
 }
@@ -668,13 +698,20 @@ function openCry(target, slotIndex) {
   const def = defenceOf(target), name = SIDES[mySide].name.toLowerCase();
   const el = sheet(`<header><h2>Battle cry</h2><button class="close" type="button">Hold back</button></header>
     <p>The ${SIDES[target.side].name.toLowerCase()} hold this hex with ${def}. Shout one of the ${name}' arguments: every ${CRY_VOTES} upvotes it has adds 1 to your charge.</p>
+    <div class="write"><input maxlength="120" placeholder="Or write your own" aria-label="Your own battle cry" /><button class="vote" type="button">Shout it</button></div>
+    <p style="font-size:13px">A new cry starts with no strength. It goes to the war council, and every ${CRY_VOTES} points it earns there make each charge that shouts it stronger. You're credited with every hex it takes.</p>
     <div class="council"></div>`);
   const list = el.querySelector('.council');
+  el.querySelector('.write .vote').onclick = () => {
+    const text = el.querySelector('.write input').value.trim(); if (!text) return;
+    const cry = { side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0 }; args.push(cry);
+    el.remove(); myPoints += assault(target, mySide, 'you', cry); hand[slotIndex].used = true; picked = null; hover = null; afterMove();
+  };
   const options = [...args].filter((a) => a.side === mySide).sort((x, y) => y.votes - x.votes).slice(0, 4);
   [...options, null].forEach((cry) => {
     const atk = attackOf(target, mySide, cry), wins = atk > def;
     const row = document.createElement('button'); row.type = 'button'; row.className = 'arg'; row.style.borderColor = SIDES[mySide].ink; row.style.textAlign = 'left'; row.style.font = 'inherit'; row.style.cursor = 'pointer'; row.style.color = 'inherit';
-    row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : 'u/' + cry.by}, ${cry.votes} upvotes, +${cryPower(cry)}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${atk} vs ${def}</span>`;
+    row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : titled(cry.by)}, ${cry.votes} points, +${cryPower(cry)}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${atk} vs ${def}</span>`;
     row.onclick = () => {
       el.remove();
       myPoints += assault(target, mySide, 'you', cry);
@@ -683,6 +720,25 @@ function openCry(target, slotIndex) {
     };
     list.append(row);
   });
+}
+// ---------- midnight: the day's result, pinned under the post ----------
+function openMidnight() {
+  hover = null; picked = null; draw();
+  let a = 0, b = 0; for (const c of cells.values()) { if (c.side === 'a') a++; if (c.side === 'b') b++; }
+  const win = a >= b ? 'a' : 'b', pa = Math.round((Math.max(a, b) / Math.max(1, a + b)) * 100);
+  const generals = Object.entries(stats).filter(([, st]) => st.today > 0).sort((x, y) => y[1].today - x[1].today);
+  const [gen, genStat] = generals[0] || ['nobody', { today: 0 }];
+  const cry = [...args].filter((x) => x.taken).sort((x, y) => y.taken - x.taken)[0] || [...args].sort((x, y) => y.votes - x.votes)[0];
+  const mine = statOf('you').today;
+  const el = sheet(`<header><h2>Midnight</h2><button class="close" type="button">Back to the war</button></header>
+    <p>At 00:00 UTC the war stops and this goes up as a pinned comment under the post.</p>
+    <img alt="The island at midnight" style="width:100%;border:1px solid rgba(58,42,28,.3)" src="${canvas.toDataURL('image/png')}" />
+    <h2 style="color:${SIDES[win].ink}">The ${SIDES[win].name.toLowerCase()} hold the island, ${pa}% to ${100 - pa}%</h2>
+    <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken</small></div></div>
+    <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
+    <div class="arg" style="border-color:${SIDES[mySide].ink}"><div style="flex:1"><q>Your day</q><small>${mine} ${mine === 1 ? 'hex' : 'hexes'} taken, ${myPoints} points. Rank: ${rankOf('you')[1]}.</small></div></div>
+    <p>Tomorrow's feud: <em>Pineapple on pizza?</em></p>`);
+  return el;
 }
 new ResizeObserver(() => { layout(); draw(); }).observe(canvas);
 document.fonts.ready.then(() => { tally(); renderCards(); layout(); draw(); setTimeout(someoneMoves, 1500); });
