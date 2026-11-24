@@ -36,6 +36,7 @@
   .ballot .choice > button[aria-pressed="true"] { border-color: var(--ink); background: rgba(58,42,28,.07); }
   .ballot small { font-style: italic; color: var(--ink-soft); }
   .ballot .choice > button > small { white-space: nowrap; }
+  .ballot .choice > button:disabled { cursor: default; opacity: .8; }
   .you #rank { display: block; min-height: 19px; white-space: normal; }
   .map-wrap { position: relative; flex: 1; min-height: 0; }
   canvas#map { display: block; width: 100%; height: 100%; touch-action: none; }

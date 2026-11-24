@@ -3,7 +3,7 @@
 import { isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
 import {
   cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX,
-  type Argument, type FeudInfo, type FighterRecord, type Move, type NewMove, type Side, type State,
+  type Argument, type FeudInfo, type FighterRecord, type LastTime, type Move, type NewMove, type Side, type State,
 } from '../shared/rules.ts';
 import { builtinTopic, candidatesAfter, DEFAULT_TOPIC, SUGGEST, type Topic } from '../shared/topics.ts';
 
@@ -40,7 +40,9 @@ export function resultsComment(r: Results, tomorrow: { question: string; by?: st
   const head = r.a === r.b
     ? `**Midnight, day ${day}: the island is split, 50% to 50%** (${hexes(r.a)} each).`
     : `**Midnight, day ${day}: the ${sides[win].toLowerCase()} hold the island, ${pct(r[win], total)}% to ${100 - pct(r[win], total)}%** (${r[win]} hexes to ${r[win === 'a' ? 'b' : 'a']}).`;
+  const last = r.feud.rematch;
   const lines = [
+    last ? `- Rematch: last time, on day ${last.day}, ${last.a === last.b ? 'it ended split' : `the ${sides[last.a > last.b ? 'a' : 'b'].toLowerCase()} won, ${pct(Math.max(last.a, last.b), last.a + last.b)}% to ${100 - pct(Math.max(last.a, last.b), last.a + last.b)}%`}` : null,
     r.general ? `- General of the day: u/${r.general.name}, ${hexes(r.general.hexes)} taken` : null,
     r.cry ? `- Cry of the day: \u201c${r.cry.text}\u201d by u/${r.cry.by}${r.cry.hexes ? `, took ${hexes(r.cry.hexes)}` : ''}` : null,
     `- Sworn in: ${r.sworn.a} for the ${sides.a.toLowerCase()}, ${r.sworn.b} for the ${sides.b.toLowerCase()}`,
@@ -116,8 +118,26 @@ const LINKY = /https?:|www\.|\.(com|net|org|io|gg|ly)\b|\b[ru]\/\w/i;
 
 /** The flair line for a fighter's record. */
 export function flairText(r: FighterRecord): string {
-  const days = `${r.streak} ${r.streak === 1 ? 'day' : 'days'} at war`;
-  return r.wins ? `Feudlands: ${days}, ${r.wins} ${r.wins === 1 ? 'win' : 'wins'}` : `Feudlands: ${days}`;
+  const parts = r.streak ? [`${r.streak} ${r.streak === 1 ? 'day' : 'days'} at war`] : [];
+  if (r.wins) parts.push(`${r.wins} ${r.wins === 1 ? 'win' : 'wins'}`);
+  if (r.made) parts.push(r.made === 1 ? 'feud maker' : `feud maker x${r.made}`);
+  return `Feudlands: ${parts.join(', ')}`;
+}
+
+/** A player's feud became a post: they're a feud maker. Returns their new record for the flair. */
+export async function creditMaker(store: Store, topic: Topic, day: number): Promise<{ name: string; record: FighterRecord } | null> {
+  if (!topic.by) return null;
+  const before = await recordOf(store, topic.by);
+  const record = { ...(before ?? { streak: 0, best: 0, wins: 0, lastDay: day - 1 }), made: (before?.made ?? 0) + 1 };
+  await store.hSet(FIGHTERS_KEY, { [topic.by]: JSON.stringify(record) });
+  return { name: topic.by, record };
+}
+
+const historyKey = (topicId: string) => `feud:history:${topicId}`;
+/** The last time this topic was fought, before the given day. */
+async function lastTime(store: Store, topicId: string, before: number): Promise<LastTime | null> {
+  const rows = Object.values(await store.hGetAll(historyKey(topicId))).map((row) => JSON.parse(row) as LastTime);
+  return rows.filter((r) => r.day < before).sort((x, y) => y.day - x.day)[0] ?? null;
 }
 
 const keys = (post: string) => {
@@ -150,7 +170,10 @@ export class Feud {
   async info(): Promise<FeudInfo> {
     const meta = await this.store.hGetAll(this.k.meta);
     const topic = await resolveTopic(this.store, meta.topic), day = Number(meta.day) || LEGACY_DAY;
-    return { day, topic: topic.id, question: topic.question, sides: topic.sides, glyphs: topic.glyphs ?? null, by: topic.by ?? null };
+    return {
+      day, topic: topic.id, question: topic.question, sides: topic.sides, glyphs: topic.glyphs ?? null, by: topic.by ?? null,
+      rematch: await lastTime(this.store, topic.id, day),
+    };
   }
 
   /** Tomorrow's three choices with their votes, and the one you picked. */
@@ -183,6 +206,8 @@ export class Feud {
     const openers = { a: plain(argA, TEXT_MAX), b: plain(argB, TEXT_MAX) };
     if ([q, sides.a, sides.b, openers.a, openers.b].some((t) => LINKY.test(t))) throw new FeudError('No links or usernames in a feud');
     if (!q.endsWith('?')) q = `${q.replace(/[.!]+$/, '')}?`;
+    const same = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if ((await this.next()).choices.some((c) => same(c.question) === same(q))) throw new FeudError('That feud is already on the ballot. Vote for it instead.');
     const id = `c${await this.store.incrBy(TOPIC_SEQ_KEY, 1)}`;
     if (!(await this.store.hSetNX(this.k.proposedBy, user, id))) throw new FeudError('You already suggested a feud today', 429);
     const topic: Topic = {
@@ -192,8 +217,7 @@ export class Feud {
     const row = JSON.stringify(topic);
     await this.store.hSet(TOPICS_KEY, { [id]: row });
     await this.store.hSet(this.k.proposals, { [id]: row });
-    await this.voteNext(id);
-    return id;
+    return id; // the author can't vote for it: other fighters have to want it
   }
 
   /** A moderator strikes a player's suggestion off the ballot. Its votes go with it. */
@@ -207,7 +231,9 @@ export class Feud {
   async voteNext(topicId: unknown): Promise<void> {
     const user = this.fighter();
     const { choices } = await this.next();
-    if (!choices.some((c) => c.id === topicId)) throw new FeudError('That feud isn\u2019t on tomorrow\u2019s ballot');
+    const choice = choices.find((c) => c.id === topicId);
+    if (!choice) throw new FeudError('That feud isn\u2019t on tomorrow\u2019s ballot');
+    if (choice.by === user) throw new FeudError('You can\u2019t vote for your own feud. Get others to.');
     const before = await this.store.hGet(this.k.nextMine, user);
     if (before === topicId) return;
     if (before && (await this.store.hGet(this.k.next, before)) !== undefined) await this.store.hIncrBy(this.k.next, before, -1);
@@ -263,6 +289,12 @@ export class Feud {
     const record = { streak, best: Math.max(streak, before?.best ?? 0), wins: before?.wins ?? 0, lastDay: day };
     await this.store.hSet(FIGHTERS_KEY, { [user]: JSON.stringify(record) });
     return record;
+  }
+
+  /** Files today's result under its topic, so the next time it comes round it's a rematch. */
+  async remember(r: Results): Promise<void> {
+    const entry: LastTime = { day: r.feud.day, a: r.a, b: r.b };
+    await this.store.hSet(historyKey(r.feud.topic), { [String(r.feud.day)]: JSON.stringify(entry) });
   }
 
   /** At midnight: everyone sworn to the winning side gets a win. Returns their names and new records. A split day has no winner. */

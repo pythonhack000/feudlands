@@ -3,7 +3,7 @@ import { serve } from '@hono/node-server';
 import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
-import { ballotNotice, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment } from './feud.ts';
+import { ballotNotice, creditMaker, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment } from './feud.ts';
 import { DEFAULT_TOPIC, type Topic } from '../shared/topics.ts';
 import type { FighterRecord } from '../shared/rules.ts';
 
@@ -39,9 +39,12 @@ async function nextFeud(): Promise<{ topic: string; day: number }> {
 }
 
 async function postFeud(topic: string, day: number): Promise<string> {
-  const post = await reddit.submitCustomPost({ title: titleOf(await resolveTopic(redis, topic), day), entry: 'default' });
+  const chosen = await resolveTopic(redis, topic);
+  const post = await reddit.submitCustomPost({ title: titleOf(chosen, day), entry: 'default' });
   await Feud.open(redis, post.id, topic, day);
   await redis.zAdd(POSTS_KEY, { member: post.id, score: Date.now() });
+  const maker = await creditMaker(redis, chosen, day);
+  if (maker) await setFlair(maker.name, maker.record);
   return post.id;
 }
 
@@ -53,6 +56,7 @@ async function closeDay(postId: string, tomorrow: Topic | null): Promise<boolean
   const comment = await reddit.submitComment({ id: postId as `t3_${string}`, text: resultsComment(results, tomorrow), runAs: 'APP' });
   await comment.distinguish(true);
   await redis.set(doneKey, comment.id);
+  await feud.remember(results);
   for (const { name, record } of await feud.creditWinners(results)) await setFlair(name, record);
   return true;
 }

@@ -8,10 +8,13 @@ export const isSide = (value: unknown): value is Side => value === 'a' || value 
 export const LEGACY_DAY = 12;
 
 /** Which feud a post is fighting. */
-export type FeudInfo = { day: number; topic: string; question: string; sides: Record<Side, string>; glyphs: Record<Side, string> | null; by: string | null };
+export type FeudInfo = { day: number; topic: string; question: string; sides: Record<Side, string>; glyphs: Record<Side, string> | null; by: string | null; rematch: LastTime | null };
 
 /** A fighter's run across days: consecutive days at war, and days their side won. */
-export type FighterRecord = { streak: number; best: number; wins: number; lastDay: number };
+export type FighterRecord = { streak: number; best: number; wins: number; lastDay: number; made?: number };
+
+/** How this topic went the last time it was fought, for a rematch. */
+export type LastTime = { day: number; a: number; b: number };
 
 /** Every this many upvotes make a battle cry 1 stronger. */
 export const CRY_VOTES = 20;

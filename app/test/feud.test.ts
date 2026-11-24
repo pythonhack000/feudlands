@@ -189,19 +189,22 @@ test('a feud signs up for midnight the first time anyone opens it', async () => 
   assert.deepEqual(await store.zRange('feud:posts', 0, Number.MAX_SAFE_INTEGER, { by: 'score' }), [{ member: 't3_abc', score: T0 }]);
 });
 
-import { flairText, resolveTopic } from '../src/server/feud.ts';
+import { creditMaker, flairText, resolveTopic } from '../src/server/feud.ts';
 
-test('a player suggests a feud: cleaned, on the ballot with their vote, one per day', async () => {
+test('a player suggests a feud: cleaned, on the ballot, one per day, and they cannot vote for it', async () => {
   const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
   const id = await ann.suggest('  Socks with <b>sandals</b>  ', 'Yes', 'Never');
   const next = await ann.next();
   const mine = next.choices.find((c) => c.id === id)!;
   assert.equal(mine.question, 'Socks with bsandals/b?');
-  assert.equal(mine.by, 'ann'); assert.equal(mine.votes, 1);
-  assert.equal(next.mine, id); assert.equal(next.suggested, true);
+  assert.equal(mine.by, 'ann'); assert.equal(mine.votes, 0);
+  assert.equal(next.mine, null); assert.equal(next.suggested, true);
+  await assert.rejects(ann.voteNext(id), /your own feud/);
   await assert.rejects(ann.suggest('Another one here?', 'A', 'B'), /already suggested/);
   const bob = new Feud(store, 'p', 'bob', T0);
   await assert.rejects(bob.suggest('Hi?', 'A', 'B'), /real question/);
+  await assert.rejects(bob.suggest('socks WITH bsandals/b', 'A', 'B'), /already on the ballot/);
+  await assert.rejects(bob.suggest('Tabs or spaces', 'A', 'B'), /already on the ballot/);
   await assert.rejects(bob.suggest('Which is best?', 'Same', 'same'), /different names/);
   await assert.rejects(bob.suggest('Visit www.spam.com today?', 'A', 'B'), /No links/);
   await assert.rejects(bob.suggest('Is u/someone right?', 'A', 'B'), /No links/);
@@ -214,6 +217,9 @@ test('a suggested feud can win and become a post, credited to its author, with a
   await new Feud(store, 'p', 'bob', T0).voteNext(id);
   assert.equal(await ann.winner(), id);
   await Feud.open(store, 'p2', id, 13);
+  const maker = (await creditMaker(store, await resolveTopic(store, id), 13))!;
+  assert.equal(maker.name, 'ann');
+  assert.equal(flairText(maker.record), 'Feudlands: feud maker');
   const st = await new Feud(store, 'p2', 'cy', T0).state(0);
   assert.equal(st.feud.question, 'Socks with sandals?');
   assert.equal(st.feud.by, 'ann');
@@ -279,4 +285,23 @@ test('the moderators\' notice quotes the feud, its author and how to stop it', (
   assert.match(body, /> \*\*Socks with sandals\?\*\* Comfort or Dignity/);
   assert.match(body, /> For the comfort: Warm toes\./);
   assert.match(body, /remove it from the ballot/);
+});
+
+test('a topic fought before comes back as a rematch, with the last result in the game and the comment', async () => {
+  const store = memoryStore();
+  await Feud.open(store, 'old', 'tabs-spaces', 4);
+  const old = new Feud(store, 'old', null, T0), r = await old.results();
+  await old.remember({ ...r, a: 54, b: 46 });
+  assert.equal((await old.info()).rematch, null); // its own day isn't a rematch of itself
+  await Feud.open(store, 'new', 'tabs-spaces', 12);
+  const info = await new Feud(store, 'new', null, T0).info();
+  assert.deepEqual(info.rematch, { day: 4, a: 54, b: 46 });
+  const text = resultsComment(await new Feud(store, 'new', null, T0).results());
+  assert.match(text, /- Rematch: last time, on day 4, the tabs won, 54% to 46%/);
+  await Feud.open(store, 'fresh', 'gif', 12);
+  assert.equal((await new Feud(store, 'fresh', null, T0).info()).rematch, null);
+});
+
+test('flair grows with streak, wins and feuds made', () => {
+  assert.equal(flairText({ streak: 3, best: 3, wins: 2, lastDay: 9, made: 2 }), 'Feudlands: 3 days at war, 2 wins, feud maker x2');
 });

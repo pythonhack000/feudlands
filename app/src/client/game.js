@@ -347,7 +347,11 @@ function setFeud(feud) {
   document.title = `Feudlands: ${feud.question}`;
   for (const id of ['question', 'pickQuestion']) { const el = document.getElementById(id); if (el) el.textContent = feud.question; }
   const by = document.getElementById('feudBy');
-  if (by) { by.hidden = !feud.by; by.textContent = feud.by ? `A feud suggested by u/${feud.by}` : ''; }
+  const last = feud.rematch, pctOf = (x, y) => Math.round((x / Math.max(1, x + y)) * 100);
+  const rematch = !last ? '' : last.a === last.b ? `Rematch: on day ${last.day} it ended split.`
+    : `Rematch: on day ${last.day} the ${(last.a > last.b ? feud.sides.a : feud.sides.b).toLowerCase()} won, ${pctOf(Math.max(last.a, last.b), Math.min(last.a, last.b))}% to ${100 - pctOf(Math.max(last.a, last.b), Math.min(last.a, last.b))}%.`;
+  const lines = [feud.by ? `A feud suggested by u/${feud.by}.` : '', rematch].filter(Boolean);
+  if (by) { by.hidden = !lines.length; by.textContent = lines.join(' '); }
   document.getElementById('dayNo').textContent = String(feud.day);
   document.getElementById('nameA').textContent = feud.sides.a;
   document.getElementById('nameB').textContent = feud.sides.b;
@@ -383,7 +387,9 @@ function renderBallot(box) {
     const row = document.createElement('div'); row.className = 'choice';
     const b = document.createElement('button');
     b.type = 'button'; b.setAttribute('aria-pressed', String(ballot.mine === choice.id));
-    b.innerHTML = `<span>${esc(choice.question)}${choice.by ? `<small> suggested by ${choice.by === myName ? 'you' : 'u/' + esc(choice.by)}</small>` : ''}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}</small>`;
+    const own = Boolean(choice.by && choice.by === myName); // you can't vote for your own feud
+    b.disabled = own;
+    b.innerHTML = `<span>${esc(choice.question)}${choice.by ? `<small> suggested by ${choice.by === myName ? 'you' : 'u/' + esc(choice.by)}</small>` : ''}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}${own ? ', yours to campaign for' : ''}</small>`;
     b.onclick = async () => {
       const note = box.nextElementSibling;
       try { applyState(await api(`next?${after()}`, { topic: choice.id })); renderBallot(box); note.textContent = 'Your vote is in. You can change it until midnight.'; }

@@ -14,7 +14,8 @@ async function showFeud(): Promise<void> {
     set('question', out.data.question);
     set('nameA', out.data.sides.a);
     set('nameB', out.data.sides.b);
-    set('brand', `Feudlands, day ${out.data.day}`);
+    const last = out.data.rematch;
+    set('brand', last ? `Feudlands, day ${out.data.day}: a rematch` : `Feudlands, day ${out.data.day}`);
   } catch (error) {
     console.warn('Could not load today’s feud', error);
   }
