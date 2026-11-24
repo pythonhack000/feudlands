@@ -57,7 +57,7 @@ const CRY_VOTES = 20, HOME = 1;
 // A cry's strength is its score, minus the score of the best rebuttal the other side has posted under it.
 const rawPower = (x) => Math.max(0, Math.floor(x.votes / CRY_VOTES));
 const rebuttalOf = (cry) => (cry && cry.replies && cry.replies.length ? [...cry.replies].sort((x, y) => y.votes - x.votes)[0] : null);
-const cryPower = (cry) => (cry ? Math.max(0, rawPower(cry) - (rebuttalOf(cry) ? rawPower(rebuttalOf(cry)) : 0)) : 0);
+const cryPower = (cry) => (!cry ? 0 : typeof cry.power === 'number' ? cry.power : Math.max(0, rawPower(cry) - (rebuttalOf(cry) ? rawPower(rebuttalOf(cry)) : 0)));
 const canCharge = (c, side) => Boolean(c && c.land && c.side && c.side !== side && ownNear(c, side) > 0);
 const attackOf = (c, side, cry) => 1 + ownNear(c, side) + cryPower(cry);
 const defenceOf = (c) => STRENGTH[c.kind] + ownNear(c, c.side) + HOME;
@@ -326,15 +326,15 @@ function hexAt(px, py) {
 function wrap(text, width) { const out = []; let line = ''; for (const w of text.split(' ')) { if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w; } else line += ' ' + w; } if (line.trim()) out.push(line.trim()); return out; }
 const bestCry = (side) => [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[0] || null;
 function assault(c, side, by, cry) {
-  const now = performance.now(), atk = attackOf(c, side, cry), def = defenceOf(c), won = atk > def, enemy = c.side;
-  for (let i = battles.length - 1; i >= 0; i--) if (now - battles[i].at > BATTLE_MS) battles.splice(i, 1);
-  battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won, seed: Math.floor(now) });
+  const now = replaying ? -Infinity : performance.now(), atk = attackOf(c, side, cry), def = defenceOf(c), won = atk > def, enemy = c.side;
+  for (let i = battles.length - 1; i >= 0; i--) if (performance.now() - battles[i].at > BATTLE_MS) battles.splice(i, 1);
+  if (!replaying) battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won, seed: Math.floor(now) });
   if (won) {
     Object.assign(c, { side, kind: 'camp', by, flipAt: now + 900, label: null });
     const boxed = captures(side);
     boxed.forEach((f) => Object.assign(f, { side, flipAt: now + 1200, label: 'captured', by }));
     credit(by, 1 + boxed.length);
-    if (cry) { cry.taken = (cry.taken || 0) + 1 + boxed.length; credit(cry.by, 0); }
+    if (cry && cry.id) takenBy[cry.id] = (takenBy[cry.id] || 0) + 1 + boxed.length;
   }
   const who = by === 'you' ? 'You' : titled(by);
   log(`<span>${who} charged the ${SIDES[enemy].name.toLowerCase()}, ${atk} against ${def}: ${won ? 'taken' : 'held off'}</span><em>${won ? '+3' : '+0'}</em>`, side);
@@ -369,7 +369,7 @@ function log(html, side) {
   while (feedEl.children.length > 3) feedEl.lastChild.remove();
 }
 function move(c, kind, side, by) {
-  const now = performance.now();
+  const now = replaying ? -Infinity : performance.now();
   Object.assign(c, { side, kind, by, bornAt: now, label: titled(by) });
   const flipped = captures(side);
   flipped.forEach((f) => Object.assign(f, { side, flipAt: now + 350, label: 'captured', by }));
@@ -379,33 +379,96 @@ function move(c, kind, side, by) {
   tally(); showRank(); animate();
   return 1 + flipped.length * 2;
 }
-// Other players look for the move that captures the most, else push the front line.
-const crowd = rng(99);
-// The demo crowd plays a day's worth of moves, then the front goes quiet. It waits while the tab is hidden.
-const CROWD_MOVES_PER_DAY = 80, HIDDEN_RECHECK_MS = 2000;
-const FREE_LAND_KEPT = 0.25; // the crowd stops building once only this share of land is free, so you always have room
-let crowdMoves = 0;
-function someoneMoves() {
-  if (document.hidden) { setTimeout(someoneMoves, HIDDEN_RECHECK_MS); return; }
-  if (crowdMoves >= CROWD_MOVES_PER_DAY) { log('<span>The front has gone quiet. The island is decided at midnight.</span>', mySide || 'a'); offerMidnight(); return; }
-  crowdMoves++;
-  const by = NAMES[Math.floor(crowd() * NAMES.length)], side = sideOf(by);
+// The demo crowd: the server sends a seed, and every client works out the same move from it.
+// Crowd fighters look for the move that captures the most, else push the front line. They charge without a cry.
+const FREE_LAND_KEPT = 0.25; // the crowd stops building once only this share of land is free, so players always have room
+function crowdMove(seed) {
+  const roll = rng(seed);
+  const by = NAMES[Math.floor(roll() * NAMES.length)], side = sideOf(by);
   const land = [...cells.values()].filter((c) => c.land);
   const crowded = land.filter(isFree).length <= land.length * FREE_LAND_KEPT;
-  if (crowded || crowd() < 0.45) {
-    const cry = [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[Math.floor(crowd() * 2)] || null;
-    const targets = [...cells.values()].filter((c) => canCharge(c, side)).map((c) => ({ c, v: attackOf(c, side, cry) - defenceOf(c) + crowd() })).sort((x, y) => y.v - x.v);
-    if (targets[0]) { assault(targets[0].c, side, by, cry); setTimeout(someoneMoves, 3000 + crowd() * 3000); return; }
+  if (crowded || roll() < 0.45) {
+    const targets = land.filter((c) => canCharge(c, side)).map((c) => ({ c, v: attackOf(c, side, null) - defenceOf(c) + roll() })).sort((x, y) => y.v - x.v);
+    if (targets[0]) { assault(targets[0].c, side, by, null); return; }
   }
-  const free = crowded ? [] : [...cells.values()].filter(isFree);
-  const scored = free.map((c) => ({ c, v: wouldCapture(c, side) * 5 + landNeighbours(c).filter((n) => n.side).length + crowd() * 2 }));
+  const scored = (crowded ? [] : land.filter(isFree)).map((c) => ({ c, v: wouldCapture(c, side) * 5 + landNeighbours(c).filter((n) => n.side).length + roll() * 2 }));
   scored.sort((x, y) => y.v - x.v);
-  const pick = scored[Math.floor(crowd() * Math.min(3, scored.length))];
-  if (pick) move(pick.c, crowd() < 0.15 ? 'tower' : 'camp', side, by);
-  document.getElementById('here').textContent = String(27 + Math.floor(crowd() * 9));
-  // The council never sleeps: someone upvotes an argument now and then.
-  if (crowd() < 0.7) { const a = args[Math.floor(crowd() * args.length)]; const target = a.replies.length && crowd() < 0.4 ? a.replies[0] : a; target.votes += 1 + Math.floor(crowd() * 3); syncRally(); }
-  setTimeout(someoneMoves, 2200 + crowd() * 3000);
+  const pick = scored[Math.floor(roll() * Math.min(3, scored.length))];
+  if (pick) move(pick.c, roll() < 0.15 ? 'tower' : 'camp', side, by);
+}
+
+// ---------- the shared war: the server keeps the log, every client replays it ----------
+const POLL_MS = 3000;
+let myName = null, lastSeq = 0, replaying = false, busy = false, quietShown = false;
+async function api(path, body) {
+  let res;
+  try {
+    res = await fetch(`/api/${path}`, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  } catch (error) {
+    console.warn('War server unreachable', error);
+    throw new Error('Can\u2019t reach the war. Check your connection.');
+  }
+  const out = await res.json().catch(() => null);
+  if (!out || !out.ok) throw new Error((out && out.error) || 'The war server stumbled. Try again.');
+  return out.data;
+}
+const after = () => `after=${lastSeq}`;
+// One move from the log. Returns the points it scored, or null if the board had already moved on.
+function applyMove(m) {
+  lastSeq = Math.max(lastSeq, m.seq);
+  if (m.t === 'bot') { crowdMove(m.seed); return 0; }
+  const c = cell(m.q, m.r), by = m.by === myName ? 'you' : m.by;
+  if (m.t === 'build') {
+    if (!isFree(c)) return null;
+    const gained = move(c, m.kind, m.side, by);
+    if (by === 'you') spend(m.kind, gained);
+    return gained;
+  }
+  if (!canCharge(c, m.side)) return null;
+  const said = m.cry && args.find((a) => a.id === m.cry.id);
+  const cry = m.cry ? { ...(said || { text: '', by: m.by, side: m.side, replies: [] }), id: m.cry.id, power: m.cry.power } : null;
+  const gained = assault(c, m.side, by, cry);
+  if (by === 'you') spend('charge', gained);
+  return gained;
+}
+// Your own moves come back through the log too, so a reload restores your hand and points.
+function spend(kind, gained) {
+  const slot = hand.find((x) => !x.used && x.kind === kind);
+  if (slot) slot.used = true;
+  myPoints += gained;
+}
+function applyState(state) {
+  myName = state.me.name;
+  setCouncil(state.args, state.myVotes);
+  const results = state.moves.filter((m) => m.seq > lastSeq).map((m) => ({ m, gained: applyMove(m) }));
+  setCouncil(state.args, state.myVotes); // again, so cries carry the hexes they just took
+  document.getElementById('here').textContent = String(Math.max(1, state.here));
+  document.querySelectorAll('#pick [data-side] small').forEach((el) => { el.textContent = `${state.sworn[el.closest('button').dataset.side]} sworn in`; });
+  if (state.quiet && !quietShown) { quietShown = true; log('<span>The front has gone quiet. The island is decided at midnight.</span>', mySide || 'a'); offerMidnight(); }
+  syncRally();
+  return results;
+}
+// Send a move, then replay everything up to and including it.
+async function submit(path, body) {
+  if (busy) return null;
+  busy = true;
+  try {
+    const results = applyState(await api(`${path}?${after()}`, body));
+    const mine = [...results].reverse().find(({ m }) => m.by === myName && m.t !== 'bot');
+    return mine || null;
+  } catch (error) {
+    statusEl.textContent = error.message;
+    return null;
+  } finally {
+    busy = false;
+  }
+}
+async function poll() {
+  if (!document.hidden && !busy) {
+    try { applyState(await api(`state?${after()}`)); }
+    catch (error) { console.warn('Poll failed', error); }
+  }
+  setTimeout(poll, POLL_MS);
 }
 
 // ---------- training: a new player unlocks one action at a time ----------
@@ -495,15 +558,22 @@ function showRank() {
 }
 
 // ---------- choosing a side ----------
-document.querySelectorAll('#pick button').forEach((btn) => btn.addEventListener('click', () => {
-  mySide = btn.dataset.side;
-  document.getElementById('pick').remove();
+document.querySelectorAll('#pick button').forEach((btn) => btn.addEventListener('click', async () => {
+  if (!myName) { document.getElementById('pickNote').textContent = 'Log in to Reddit to join the war. You can still watch.'; return; }
+  try { applyState(await api(`side?${after()}`, { side: btn.dataset.side })); }
+  catch (error) { document.getElementById('pickNote').textContent = error.message; return; }
+  joinSide(btn.dataset.side);
+}));
+function joinSide(side) {
+  if (mySide) return;
+  mySide = side;
+  document.getElementById('pick')?.remove();
   showHeaderLinks();
   grantedRally = reinforcements(mySide);
   statusEl.textContent = 'Pick a piece.';
   document.getElementById('skipTraining').onclick = () => advanceLesson(TRAINED);
   coach(); renderCards(); draw();
-}));
+}
 // The header only offers what you've unlocked.
 function showHeaderLinks() {
   const links = [['openRules', 'How to play', openRules, true], ['openCouncil', 'War council', openCouncil, lesson >= 3], ['openGallery', 'Banners', openGallery, trained()], ['openEasel', 'Draw one', openEasel, trained()], ['openMidnight', 'Midnight', openMidnight, true]];
@@ -541,22 +611,16 @@ function openGallery() {
 // ---------- the war council: arguments win reinforcements ----------
 // In the real game these are the post's comments; their upvotes count for the writer's side.
 const RALLY_EVERY = 25;
-const args = [
-  { side: 'a', by: fightersOf('a')[0], text: 'A cat will never make you walk it in the rain at 6 am.', votes: 48 },
-  { side: 'b', by: fightersOf('b')[0], text: 'Nobody has ever been rescued from a fire by a cat.', votes: 44 },
-  { side: 'a', by: fightersOf('a')[1], text: 'Cats invented the internet. Dogs just chew the cables.', votes: 31 },
-  { side: 'b', by: fightersOf('b')[1], text: 'A dog is happy to see you every single time. Every. Time.', votes: 27 },
-  { side: 'a', by: fightersOf('a')[2], text: 'Quiet, clean, and judges your life choices for free.', votes: 12 },
-  { side: 'b', by: fightersOf('b')[2], text: 'Try taking a cat on a hike.', votes: 9 },
-].map((a) => ({ ...a, vote: 0, taken: 0, replies: [] }));
-// Rebuttals from the other side, threaded under each argument.
-[[0, 'The walk in the rain is the best part of the day. Ask any dog.', 26],
- [1, 'Nobody has been rescued from a fire by a goldfish either. Not a job requirement.', 41],
- [2, 'Dogs invented loyalty. Try running a forum without it.', 8],
- [3, 'Happy to see you, the mailman, and a sock.', 19]].forEach(([i, text, votes]) => {
-  const a = args[i], side = a.side === 'a' ? 'b' : 'a';
-  a.replies.push({ side, by: fightersOf(side)[3 + (i % 2)], text, votes, vote: 0 });
-});
+// The council lives on the server: every argument, rebuttal and vote is shared by the whole post.
+let args = [];
+const takenBy = {}; // hexes each cry has taken today, counted from the move log
+function setCouncil(list, myVotes) {
+  const own = (by) => (by === myName ? 'you' : by);
+  const row = (a) => ({ ...a, by: own(a.by), vote: myVotes[a.id] || 0, taken: takenBy[a.id] || 0, replies: [] });
+  const top = list.filter((a) => !a.parent).map(row), byId = new Map(top.map((a) => [a.id, a]));
+  list.filter((a) => a.parent && byId.has(a.parent)).forEach((r) => byId.get(r.parent).replies.push(row(r)));
+  args = top;
+}
 const sideVotes = (side) => args.filter((a) => a.side === side).reduce((n, a) => n + Math.max(0, a.votes), 0);
 const reinforcements = (side) => Math.floor(sideVotes(side) / RALLY_EVERY);
 let grantedRally = 0;
@@ -569,10 +633,22 @@ function syncRally() {
   for (let i = 0; i < owed; i++) hand.push({ kind: 'charge', used: false, rally: true });
   if (owed > 0) { grantedRally += owed; statusEl.textContent = `The council rallied the ${SIDES[mySide].name.toLowerCase()}: +${owed} charge in your hand.`; renderCards(); }
 }
+// A vote or a post in the council. True when the server took it; the error shows in the sheet otherwise.
+async function council(path, body) {
+  try {
+    const data = await api(`${path}?${after()}`, body);
+    applyState(path === 'argue' ? data.state : data);
+    return true;
+  } catch (error) {
+    const note = document.querySelector('.sheet .councilNote');
+    if (note) note.textContent = error.message; else statusEl.textContent = error.message;
+    return false;
+  }
+}
 function openCouncil() {
   const el = sheet(`<header><h2>War council</h2><button class="close" type="button">Back to the war</button></header>
     <p>Argue for your side and rebut theirs. Upvote what's true, downvote what's nonsense. A rebuttal's score is taken off the cry it answers: an argument's score is its strength as a battle cry, and every ${RALLY_EVERY} points a side's arguments earn send each of its fighters an extra charge.</p>
-    <div class="rally"></div>
+    <div class="rally"></div><p class="councilNote" role="status"></p>
     <div class="write"><input maxlength="120" placeholder="Why the ${SIDES[mySide].name.toLowerCase()} deserve the island" aria-label="Your argument" /><button class="vote" type="button">Post</button></div>
     <div class="council"></div>`);
   const list = el.querySelector('.council'), rally = el.querySelector('.rally');
@@ -586,7 +662,7 @@ function openCouncil() {
       for (const dir of [1, -1]) {
         const v = document.createElement('button'); v.className = 'vote'; v.type = 'button'; v.setAttribute('aria-pressed', String(a.vote === dir));
         v.setAttribute('aria-label', dir > 0 ? 'Upvote' : 'Downvote'); v.textContent = dir > 0 ? '\u25B2' : '\u25BC';
-        v.onclick = () => { a.votes -= a.vote; a.vote = a.vote === dir ? 0 : dir; a.votes += a.vote; render(); advanceLesson(TRAINED); syncRally(); };
+        v.onclick = async () => { if (await council('vote', { id: a.id, dir: a.vote === dir ? 0 : dir })) { render(); advanceLesson(TRAINED); } };
         box.append(v);
         if (dir > 0) box.insertAdjacentHTML('beforeend', `<span class="pct">${a.votes}</span>`);
       }
@@ -599,7 +675,7 @@ function openCouncil() {
         const vb = document.createElement('div'); vb.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
         for (const dir of [1, -1]) {
           const v = document.createElement('button'); v.className = 'vote'; v.type = 'button'; v.setAttribute('aria-pressed', String(r.vote === dir)); v.setAttribute('aria-label', dir > 0 ? 'Upvote rebuttal' : 'Downvote rebuttal'); v.textContent = dir > 0 ? '\u25B2' : '\u25BC';
-          v.onclick = () => { r.votes -= r.vote; r.vote = r.vote === dir ? 0 : dir; r.votes += r.vote; render(); };
+          v.onclick = async () => { if (await council('vote', { id: r.id, dir: r.vote === dir ? 0 : dir })) render(); };
           vb.append(v); if (dir > 0) vb.insertAdjacentHTML('beforeend', `<span class="pct">${r.votes}</span>`);
         }
         rr.append(vb); thread.append(rr);
@@ -609,7 +685,7 @@ function openCouncil() {
         open.onclick = () => {
           open.replaceWith(Object.assign(document.createElement('div'), { className: 'write', innerHTML: `<input maxlength="120" placeholder="Answer the ${SIDES[a.side].name.toLowerCase()}" aria-label="Your rebuttal" /><button class="vote" type="button">Post</button>` }));
           const w = thread.querySelector('.write'); w.querySelector('input').focus();
-          w.querySelector('.vote').onclick = () => { const t = w.querySelector('input').value.trim(); if (!t) return; a.replies.push({ side: mySide, by: 'you', text: t, votes: 1, vote: 1 }); render(); };
+          w.querySelector('.vote').onclick = async () => { const t = w.querySelector('input').value.trim(); if (!t) return; if (await council('argue', { text: t, parent: a.id })) render(); };
         };
         thread.append(open);
       }
@@ -617,9 +693,9 @@ function openCouncil() {
     });
   };
   const input = el.querySelector('input');
-  el.querySelector('.write .vote').onclick = () => {
+  el.querySelector('.write .vote').onclick = async () => {
     const text = input.value.trim(); if (!text) return;
-    args.push({ side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0, replies: [] }); input.value = ''; render(); advanceLesson(TRAINED); syncRally();
+    if (await council('argue', { text })) { input.value = ''; render(); advanceLesson(TRAINED); }
   };
   render();
 }
@@ -678,18 +754,20 @@ canvas.addEventListener('pointermove', (e) => {
   else tip.style.display = 'none';
 });
 canvas.addEventListener('pointerleave', () => { hover = null; tip.style.display = 'none'; draw(); });
-canvas.addEventListener('pointerdown', (e) => {
+canvas.addEventListener('pointerdown', async (e) => {
   const p = pointer(e), c = hexAt(p.x, p.y), kind = pickedKind();
   if (!kind || !mySide) return;
   if (kind === 'charge') {
     if (!canCharge(c, mySide)) { statusEl.textContent = 'Charge an enemy hex that touches your land.'; return; }
-    if (lesson < 3) { plainCharge(c, picked); return; }
-    openCry(c, picked); return;
+    if (lesson < 3) { plainCharge(c); return; }
+    openCry(c); return;
   }
   if (!isFree(c)) { statusEl.textContent = 'That hex is held or under water.'; return; }
-  const gained = move(c, kind, mySide, 'you'), captured = gained > 1;
-  myPoints += gained;
-  hand[picked].used = true; picked = null; hover = null;
+  const sent = await submit('build', { kind, q: c.q, r: c.r });
+  if (!sent) return;
+  if (sent.gained === null) { statusEl.textContent = 'Someone got there first. Pick another hex.'; return; }
+  const captured = sent.gained > 1;
+  picked = null; hover = null;
   afterMove();
   if (captured) advanceLesson(2);
   else if (lesson === 0) advanceLesson(1);
@@ -707,16 +785,23 @@ function afterMove() {
   renderCards();
 }
 // While learning, a charge has no battle cry, and the result explains its numbers.
-function plainCharge(target, slotIndex) {
+async function plainCharge(target) {
   const atk = attackOf(target, mySide, null), def = defenceOf(target), near = ownNear(target, mySide);
-  myPoints += assault(target, mySide, 'you', null);
-  hand[slotIndex].used = true; picked = null; hover = null;
-  afterMove();
+  if (!await sendCharge(target, null)) return;
   statusEl.textContent = `Your attack ${atk} (1, plus ${near} for your land around it) against their defence ${def}: ${atk > def ? 'taken' : 'held off'}.`;
   advanceLesson(3);
 }
+// True once the charge is on the board.
+async function sendCharge(target, cryId) {
+  const sent = await submit('charge', { q: target.q, r: target.r, cry: cryId });
+  if (!sent) return false;
+  picked = null; hover = null;
+  afterMove();
+  if (sent.gained === null) { statusEl.textContent = 'The front moved before you got there. Your charge was spent on nothing.'; return false; }
+  return true;
+}
 // Before a charge you choose which of your side's arguments to shout.
-function openCry(target, slotIndex) {
+function openCry(target) {
   const def = defenceOf(target), name = SIDES[mySide].name.toLowerCase();
   const el = sheet(`<header><h2>Battle cry</h2><button class="close" type="button">Hold back</button></header>
     <p>The ${SIDES[target.side].name.toLowerCase()} defend this hex with <b>${def}</b>: ${STRENGTH[target.kind]} for the ${target.kind}, ${ownNear(target, target.side)} for their land around it, ${HOME} for holding it. Your attack is <b>${attackOf(target, mySide, null)}</b> before a battle cry: 1 for the charge and ${ownNear(target, mySide)} for your land around it. Beat ${def} to take it.</p>
@@ -725,22 +810,18 @@ function openCry(target, slotIndex) {
     <p style="font-size:13px">A new cry starts with no strength. It goes to the war council, and every ${CRY_VOTES} points it earns there make each charge that shouts it stronger. You're credited with every hex it takes.</p>
     <div class="council"></div>`);
   const list = el.querySelector('.council');
-  el.querySelector('.write .vote').onclick = () => {
+  el.querySelector('.write .vote').onclick = async () => {
     const text = el.querySelector('.write input').value.trim(); if (!text) return;
-    const cry = { side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0, replies: [] }; args.push(cry);
-    el.remove(); myPoints += assault(target, mySide, 'you', cry); hand[slotIndex].used = true; picked = null; hover = null; afterMove();
+    el.remove();
+    try { const { id, state } = await api(`argue?${after()}`, { text }); applyState(state); sendCharge(target, id); }
+    catch (error) { statusEl.textContent = error.message; }
   };
   const options = [...args].filter((a) => a.side === mySide).sort((x, y) => y.votes - x.votes).slice(0, 4);
   [...options, null].forEach((cry) => {
     const atk = attackOf(target, mySide, cry), wins = atk > def;
     const row = document.createElement('button'); row.type = 'button'; row.className = 'arg'; row.style.borderColor = SIDES[mySide].ink; row.style.textAlign = 'left'; row.style.font = 'inherit'; row.style.cursor = 'pointer'; row.style.color = 'inherit';
     row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : titled(cry.by)}, ${cry.votes} points, +${cryPower(cry)}${rebuttalOf(cry) && rawPower(rebuttalOf(cry)) ? ` (rebutted by ${titled(rebuttalOf(cry).by)}, \u2212${rawPower(rebuttalOf(cry))})` : ''}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${wins ? `Takes it, ${atk} to ${def}` : `Held off, ${atk} to ${def}`}</span>`;
-    row.onclick = () => {
-      el.remove();
-      myPoints += assault(target, mySide, 'you', cry);
-      hand[slotIndex].used = true; picked = null; hover = null;
-      afterMove();
-    };
+    row.onclick = () => { el.remove(); sendCharge(target, cry ? cry.id : null); };
     list.append(row);
   });
 }
@@ -803,6 +884,23 @@ function openMidnight() {
   return el;
 }
 new ResizeObserver(() => { layout(); draw(); }).observe(canvas);
-document.fonts.ready.then(() => { tally(); renderCards(); layout(); draw(); setTimeout(someoneMoves, 1500); });
+async function start() {
+  tally(); renderCards(); layout(); draw();
+  try {
+    replaying = true;
+    const state = await api('state');
+    myName = state.me.name;
+    if (state.me.side) joinSide(state.me.side); // your side from earlier today
+    applyState(state);
+  } catch (error) {
+    statusEl.textContent = error.message;
+  } finally {
+    replaying = false;
+  }
+  if (mySide && hand.some((slot) => slot.used)) afterMove();
+  tally(); renderCards(); draw();
+  setTimeout(poll, POLL_MS);
+}
+document.fonts.ready.then(start);
 // Test hook: ?debug exposes the board so scripted playthroughs can find hexes.
-if (new URLSearchParams(location.search).has('debug')) window.feud = { cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; } };
+if (new URLSearchParams(location.search).has('debug')) window.feud = { cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; }, get seq() { return lastSeq; }, get points() { return myPoints; } };

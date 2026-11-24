@@ -8,9 +8,13 @@
     "build": "vite build",
     "dev": "NODE_OPTIONS=\"--require ./tools/reddit-dns.cjs\" devvit playtest",
     "deploy": "NODE_OPTIONS=\"--require ./tools/reddit-dns.cjs\" devvit upload",
-    "test:types": "tsc -p tsconfig.json && tsc -p tsconfig.client.json"
+    "test:types": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
+    "test": "node --test test/*.test.ts",
+    "local": "vite build && node tools/local.ts"
   },
-  "engines": { "node": ">=24.0.0" },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "dependencies": {
     "@devvit/start": "0.15.4",
     "@devvit/web": "0.15.4",

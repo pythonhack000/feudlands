@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
-import { context, createServer, getServerPort, reddit } from '@devvit/web/server';
+import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
+import { api } from './api.ts';
 
 const FEUD_TITLE = 'Feudlands: Cats or dogs? Pick a side and take the island';
 
@@ -36,5 +37,10 @@ internal.post('/triggers/on-app-install', async (c) => {
 
 const app = new Hono();
 app.route('/internal', internal);
+app.route('/api', api({
+  store: redis,
+  postId: () => context.postId,
+  username: async () => (await reddit.getCurrentUsername()) ?? null,
+}));
 
 serve({ fetch: app.fetch, createServer, port: getServerPort() });

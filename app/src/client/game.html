@@ -24,7 +24,8 @@
   .rope span { position: absolute; inset: 0 auto 0 0; background: var(--a); transition: width .6s ease; }
   .rope::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink); opacity: .6; }
   .pct { font-variant-numeric: tabular-nums; }
-  .you { font-style: italic; color: var(--ink-soft); font-size: 14px; margin-top: 4px; min-height: 17px; }
+  .you { font-style: italic; color: var(--ink-soft); font-size: 14px; margin-top: 4px; min-height: 40px; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .you #rank { display: block; min-height: 19px; white-space: normal; }
   .map-wrap { position: relative; flex: 1; min-height: 0; }
   canvas#map { display: block; width: 100%; height: 100%; touch-action: none; }
   .tip { position: absolute; pointer-events: none; background: rgba(239,227,200,.95); border: 1px solid var(--ink-soft); padding: 4px 8px; font-size: 15px; white-space: nowrap; transform: translate(-50%, -120%); display: none; }
@@ -75,7 +76,7 @@
   .day-end { text-align: center; margin: -4px 0 10px; }
   .day-end button { font: inherit; font-size: 17px; color: var(--ink); background: rgba(255,250,236,.55); border: 1px solid var(--ink); padding: 6px 16px; cursor: pointer; }
   .day-end button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .you button { font: inherit; font-style: italic; color: var(--ink); background: none; border: 0; padding: 0 0 1px; margin-left: 6px; border-bottom: 1px solid var(--ink-soft); cursor: pointer; }
+  .you button { font: inherit; font-style: italic; color: var(--ink); background: none; border: 0; padding: 0 0 1px; margin-right: 12px; border-bottom: 1px solid var(--ink-soft); cursor: pointer; }
   .sheet { position: absolute; inset: 0; background: var(--parchment); z-index: 6; display: flex; flex-direction: column; padding: 16px; gap: 10px; overflow-y: auto; }
   .sheet header { padding: 0; display: flex; justify-content: space-between; align-items: baseline; }
   .sheet h2 { font-weight: 400; font-size: 26px; margin: 0; }
@@ -135,9 +136,10 @@
     <p>Today's feud splits the subreddit in two. Pick a side, then take the island for it.</p>
     <h2 class="q">Cats or dogs?</h2>
     <div class="sides">
-      <button type="button" data-side="a"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#2f5d8a" stroke="#3a2a1c" stroke-width="2"/><path d="M17 24l4-9 4 7h4l4-7 4 9c3 9-2 17-10 17s-13-8-10-17z" fill="none" stroke="#efe3c8" stroke-width="2"/></svg><b>Cats</b><small>412 sworn in</small></button>
-      <button type="button" data-side="b"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#b5452f" stroke="#3a2a1c" stroke-width="2"/><path d="M16 18c-4 2-4 10 0 12M38 18c4 2 4 10 0 12M18 16c3-3 15-3 18 0 3 8 1 20-9 22-10-2-12-14-9-22z" fill="none" stroke="#efe3c8" stroke-width="2"/></svg><b>Dogs</b><small>398 sworn in</small></button>
+      <button type="button" data-side="a"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#2f5d8a" stroke="#3a2a1c" stroke-width="2"/><path d="M17 24l4-9 4 7h4l4-7 4 9c3 9-2 17-10 17s-13-8-10-17z" fill="none" stroke="#efe3c8" stroke-width="2"/></svg><b>Cats</b><small>&nbsp;</small></button>
+      <button type="button" data-side="b"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#b5452f" stroke="#3a2a1c" stroke-width="2"/><path d="M16 18c-4 2-4 10 0 12M38 18c4 2 4 10 0 12M18 16c3-3 15-3 18 0 3 8 1 20-9 22-10-2-12-14-9-22z" fill="none" stroke="#efe3c8" stroke-width="2"/></svg><b>Dogs</b><small>&nbsp;</small></button>
     </div>
+    <p class="next" id="pickNote" role="status"></p>
     <p class="next">Tomorrow's feud is up for a vote: <em>Pineapple on pizza?</em></p>
   </section>
 </main>
