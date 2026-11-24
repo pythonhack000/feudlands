@@ -3,14 +3,26 @@ import { serve } from '@hono/node-server';
 import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
-import { Feud, POSTS_KEY, resultsComment } from './feud.ts';
-import { DEFAULT_TOPIC, topicById } from '../shared/topics.ts';
+import { Feud, flairText, POSTS_KEY, resolveTopic, resultsComment } from './feud.ts';
+import { DEFAULT_TOPIC, type Topic } from '../shared/topics.ts';
+import type { FighterRecord } from '../shared/rules.ts';
 
 /** Feuds older than this have had their midnight. */
 const OPEN_FOR_MS = 36 * 60 * 60 * 1000;
 const DAILY_KEY = 'feud:daily';
 
-const titleOf = (topicId: string, day: number) => `Feudlands, day ${day}: ${topicById(topicId).question} Pick a side and take the island`;
+const titleOf = (topic: Topic, day: number) =>
+  `Feudlands, day ${day}: ${topic.question} Pick a side and take the island${topic.by ? ` (feud suggested by u/${topic.by})` : ''}`;
+
+/** Shows a fighter's run next to their name. Flair is a bonus: a subreddit without user flair must not break the game. */
+async function setFlair(username: string, record: FighterRecord): Promise<void> {
+  try {
+    const subredditName = context.subredditName ?? (await reddit.getCurrentSubreddit()).name;
+    await reddit.setUserFlair({ subredditName, username, text: flairText(record) });
+  } catch (error) {
+    console.error(`Could not set flair for ${username}`, error);
+  }
+}
 
 /** The latest feud post, which holds tomorrow's ballot. */
 async function newestFeud(): Promise<string | null> {
@@ -27,20 +39,21 @@ async function nextFeud(): Promise<{ topic: string; day: number }> {
 }
 
 async function postFeud(topic: string, day: number): Promise<string> {
-  const post = await reddit.submitCustomPost({ title: titleOf(topic, day), entry: 'default' });
+  const post = await reddit.submitCustomPost({ title: titleOf(await resolveTopic(redis, topic), day), entry: 'default' });
   await Feud.open(redis, post.id, topic, day);
   await redis.zAdd(POSTS_KEY, { member: post.id, score: Date.now() });
   return post.id;
 }
 
 /** Pins the day's result under a feud, once. */
-async function closeDay(postId: string, tomorrow: string | null): Promise<boolean> {
+async function closeDay(postId: string, tomorrow: Topic | null): Promise<boolean> {
   const doneKey = `feud:${postId}:closed`;
   if (await redis.get(doneKey)) return false;
-  const results = await new Feud(redis, postId, null).results();
+  const feud = new Feud(redis, postId, null), results = await feud.results();
   const comment = await reddit.submitComment({ id: postId as `t3_${string}`, text: resultsComment(results, tomorrow), runAs: 'APP' });
   await comment.distinguish(true);
   await redis.set(doneKey, comment.id);
+  for (const { name, record } of await feud.creditWinners(results)) await setFlair(name, record);
   return true;
 }
 
@@ -76,7 +89,7 @@ internal.post('/scheduler/midnight', async (c) => {
   const posts = await redis.zRange(POSTS_KEY, now - OPEN_FOR_MS, now, { by: 'score' });
   let closed = 0;
   for (const { member: postId } of posts) {
-    try { if (await closeDay(postId, postId === newest ? topicById(plan.topic).question : null)) closed++; }
+    try { if (await closeDay(postId, postId === newest ? await resolveTopic(redis, plan.topic) : null)) closed++; }
     catch (error) { console.error(`Could not close the day for ${postId}`, error); }
   }
   // One new feud per UTC date, even if the task fires twice.
@@ -98,7 +111,7 @@ internal.post('/menu/close-day', async (c) => {
   const postId = context.postId;
   if (!postId) return c.json<UiResponse>({ showToast: 'Use this on a feud post' }, 400);
   try {
-    const done = await closeDay(postId, postId === (await newestFeud()) ? topicById((await nextFeud()).topic).question : null);
+    const done = await closeDay(postId, postId === (await newestFeud()) ? await resolveTopic(redis, (await nextFeud()).topic) : null);
     return c.json<UiResponse>({ showToast: done ? 'Results pinned under the feud' : 'This feud already has its results' }, 200);
   } catch (error) {
     console.error('Could not close the day', error);
@@ -112,6 +125,7 @@ app.route('/api', api({
   store: redis,
   postId: () => context.postId,
   username: async () => (await reddit.getCurrentUsername()) ?? null,
+  setFlair,
   commentAsUser: async (postId, text) => {
     await reddit.submitComment({ id: postId as `t3_${string}`, text, runAs: 'USER' });
   },

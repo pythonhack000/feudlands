@@ -10,6 +10,8 @@ export interface Topic {
   glyphs?: Record<Side, string>;
   /** The council's opening arguments: [side, text, votes, rebuts index or null]. */
   openers: [Side, string, number, number | null][];
+  /** Who suggested it, for topics from players. */
+  by?: string;
 }
 
 export const TOPICS: readonly Topic[] = [
@@ -112,7 +114,11 @@ export const TOPICS: readonly Topic[] = [
 ];
 
 export const DEFAULT_TOPIC = TOPICS[0];
-export const topicById = (id: string | undefined | null): Topic => TOPICS.find((t) => t.id === id) ?? DEFAULT_TOPIC;
+export const builtinTopic = (id: string | undefined | null): Topic | undefined => TOPICS.find((t) => t.id === id);
+export const topicById = (id: string | undefined | null): Topic => builtinTopic(id) ?? DEFAULT_TOPIC;
+
+/** Limits for a feud a player suggests. */
+export const SUGGEST = { questionMin: 8, questionMax: 90, sideMax: 24 } as const;
 
 /** Tomorrow's three choices: the next topics in the list after today's, so the vote rotates through everything. */
 export function candidatesAfter(topicId: string, count = 3): Topic[] {

@@ -346,6 +346,8 @@ function setFeud(feud) {
   SIDES.a.name = feud.sides.a; SIDES.b.name = feud.sides.b;
   document.title = `Feudlands: ${feud.question}`;
   for (const id of ['question', 'pickQuestion']) { const el = document.getElementById(id); if (el) el.textContent = feud.question; }
+  const by = document.getElementById('feudBy');
+  if (by) { by.hidden = !feud.by; by.textContent = feud.by ? `A feud suggested by u/${feud.by}` : ''; }
   document.getElementById('dayNo').textContent = String(feud.day);
   document.getElementById('nameA').textContent = feud.sides.a;
   document.getElementById('nameB').textContent = feud.sides.b;
@@ -374,11 +376,12 @@ function setBallot(next) {
   const el = document.getElementById('pickNext');
   if (el && lead) el.innerHTML = `Tomorrow's feud is up for a vote. Leading: <em>${lead.question.replace(/[<>&]/g, '')}</em>`;
 }
+const esc = (t) => String(t).replace(/[<>&]/g, '');
 function renderBallot(box) {
   box.replaceChildren(...ballot.choices.map((choice) => {
     const b = document.createElement('button');
     b.type = 'button'; b.setAttribute('aria-pressed', String(ballot.mine === choice.id));
-    b.innerHTML = `<span>${choice.question.replace(/[<>&]/g, '')}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}</small>`;
+    b.innerHTML = `<span>${esc(choice.question)}${choice.by ? `<small> suggested by ${choice.by === myName ? 'you' : 'u/' + esc(choice.by)}</small>` : ''}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}</small>`;
     b.onclick = async () => {
       const note = box.nextElementSibling;
       try { applyState(await api(`next?${after()}`, { topic: choice.id })); renderBallot(box); note.textContent = 'Your vote is in. You can change it until midnight.'; }
@@ -388,8 +391,27 @@ function renderBallot(box) {
   }));
 }
 
+// Your own feud for tomorrow: a question and two sides. It joins the ballot with your vote on it.
+function renderSuggest(box, ballotBox) {
+  if (ballot.suggested) { box.innerHTML = '<p>Your feud is on the ballot. Get people to vote for it.</p>'; return; }
+  box.innerHTML = `<p>Or suggest your own. If it wins, it goes up tomorrow with your name on it.</p>
+    <div class="write"><input name="question" maxlength="90" placeholder="The question, like: Socks with sandals?" aria-label="Your feud's question" /></div>
+    <div class="write"><input name="a" maxlength="24" placeholder="One side" aria-label="First side" /><input name="b" maxlength="24" placeholder="The other" aria-label="Second side" /><button class="vote" type="button">Suggest</button></div>
+    <p class="suggestNote" role="status"></p>`;
+  const field = (name) => box.querySelector(`[name="${name}"]`).value.trim();
+  box.querySelector('.vote').onclick = async () => {
+    const note = box.querySelector('.suggestNote');
+    if (!field('question') || !field('a') || !field('b')) { note.textContent = 'Write a question and name both sides.'; return; }
+    try {
+      applyState(await api(`suggest?${after()}`, { question: field('question'), a: field('a'), b: field('b') }));
+      renderBallot(ballotBox); renderSuggest(box, ballotBox);
+    } catch (error) { note.textContent = error.message; }
+  };
+}
+
 // ---------- the shared war: the server keeps the log, every client replays it ----------
 const POLL_MS = 3000;
+let myRecord = null; // your run across days, from the server
 let myName = null, lastSeq = 0, replaying = false, busy = false, quietShown = false;
 async function api(path, body) {
   let res;
@@ -430,6 +452,7 @@ function spend(kind, gained) {
 }
 function applyState(state) {
   myName = state.me.name;
+  myRecord = state.me.record;
   setBallot(state.next);
   setCouncil(state.args, state.myVotes);
   const results = state.moves.filter((m) => m.seq > lastSeq).map((m) => ({ m, gained: applyMove(m) }));
@@ -546,7 +569,8 @@ function renderCards() {
 function showRank() {
   const el = document.getElementById('rank'); if (!el || !mySide) return;
   const [, name] = rankOf('you'), next = RANKS.find(([min]) => min > statOf('you').total);
-  el.textContent = `${name} of the ${SIDES[mySide].name.toLowerCase()}${next ? `, ${next[0] - statOf('you').total} hexes to ${next[1]}` : ''}.`;
+  const run = myRecord ? ` ${myRecord.streak} ${myRecord.streak === 1 ? 'day' : 'days'} at war${myRecord.wins ? `, ${myRecord.wins} ${myRecord.wins === 1 ? 'win' : 'wins'}` : ''}.` : '';
+  el.textContent = `${name} of the ${SIDES[mySide].name.toLowerCase()}${next ? `, ${next[0] - statOf('you').total} hexes to ${next[1]}` : ''}.${run}`;
 }
 
 // ---------- choosing a side ----------
@@ -878,8 +902,10 @@ function openMidnight() {
     <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share as a comment</button><span role="status"></span></p>` : ''}</div></div>
     <h2>Tomorrow's feud</h2>
     <p>Vote for what the island fights over tomorrow. The winner goes up as a new post at midnight.</p>
-    <div class="ballot"></div><p class="councilNote" role="status"></p>`);
+    <div class="ballot"></div><p class="councilNote" role="status"></p>
+    <div class="suggest"></div>`);
   renderBallot(el.querySelector('.ballot'));
+  renderSuggest(el.querySelector('.suggest'), el.querySelector('.ballot'));
   const brag = el.querySelector('.brag');
   if (brag) brag.querySelector('button').onclick = () => shareLine(brag.querySelector('span'), brag.querySelector('button'));
   return el;

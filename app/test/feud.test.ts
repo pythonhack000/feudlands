@@ -141,7 +141,7 @@ test('share refuses a fighter with nothing taken, and only brags once', async ()
 
 const CATS = { day: 12, topic: 'cats-dogs', question: 'Cats or dogs?', sides: { a: 'Cats', b: 'Dogs' }, glyphs: null };
 test('the results comment names the leader, the split and tomorrow', () => {
-  const text = resultsComment({ feud: CATS, a: 30, b: 20, sworn: { a: 3, b: 2 }, general: { name: 'ann', hexes: 4 }, cry: { text: 'Meow', by: 'ann', side: 'a', hexes: 2 }, hexes: {} }, 'Pineapple on pizza?');
+  const text = resultsComment({ feud: CATS, a: 30, b: 20, sworn: { a: 3, b: 2 }, general: { name: 'ann', hexes: 4 }, cry: { text: 'Meow', by: 'ann', side: 'a', hexes: 2 }, hexes: {} }, { question: 'Pineapple on pizza?' });
   assert.equal(text, '**Midnight, day 12: the cats hold the island, 60% to 40%** (30 hexes to 20).\n\n- General of the day: u/ann, 4 hexes taken\n- Cry of the day: \u201cMeow\u201d by u/ann, took 2 hexes\n- Sworn in: 3 for the cats, 2 for the dogs\n\nTomorrow\'s feud, picked by the council: **Pineapple on pizza?**');
   assert.match(resultsComment({ feud: CATS, a: 25, b: 25, sworn: { a: 1, b: 1 }, general: null, cry: null, hexes: {} }), /split, 50% to 50%/);
 });
@@ -187,4 +187,60 @@ test('a feud signs up for midnight the first time anyone opens it', async () => 
   await new Feud(store, 't3_abc', null, T0).state(0);
   await new Feud(store, 't3_abc', null, T0 + 1).state(0);
   assert.deepEqual(await store.zRange('feud:posts', 0, Number.MAX_SAFE_INTEGER, { by: 'score' }), [{ member: 't3_abc', score: T0 }]);
+});
+
+import { flairText, resolveTopic } from '../src/server/feud.ts';
+
+test('a player suggests a feud: cleaned, on the ballot with their vote, one per day', async () => {
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  const id = await ann.suggest('  Socks with <b>sandals</b>  ', 'Yes', 'Never');
+  const next = await ann.next();
+  const mine = next.choices.find((c) => c.id === id)!;
+  assert.equal(mine.question, 'Socks with bsandals/b?');
+  assert.equal(mine.by, 'ann'); assert.equal(mine.votes, 1);
+  assert.equal(next.mine, id); assert.equal(next.suggested, true);
+  await assert.rejects(ann.suggest('Another one here?', 'A', 'B'), /already suggested/);
+  const bob = new Feud(store, 'p', 'bob', T0);
+  await assert.rejects(bob.suggest('Hi?', 'A', 'B'), /real question/);
+  await assert.rejects(bob.suggest('Which is best?', 'Same', 'same'), /different names/);
+  await assert.rejects(bob.suggest('Visit www.spam.com today?', 'A', 'B'), /No links/);
+  await assert.rejects(bob.suggest('Is u/someone right?', 'A', 'B'), /No links/);
+  await assert.rejects(new Feud(store, 'p', null, T0).suggest('Who wins this?', 'A', 'B'), /Log in/);
+});
+
+test('a suggested feud can win and become a post, credited to its author, with an empty council', async () => {
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  const id = await ann.suggest('Socks with sandals?', 'Yes', 'Never');
+  await new Feud(store, 'p', 'bob', T0).voteNext(id);
+  assert.equal(await ann.winner(), id);
+  await Feud.open(store, 'p2', id, 13);
+  const st = await new Feud(store, 'p2', 'cy', T0).state(0);
+  assert.equal(st.feud.question, 'Socks with sandals?');
+  assert.equal(st.feud.by, 'ann');
+  assert.deepEqual(st.feud.sides, { a: 'Yes', b: 'Never' });
+  assert.equal(st.args.length, 0);
+  for (let i = 1; i < 5; i++) await new Feud(store, 'p2', 'cy', T0 + i * BOT_TICK_MS).state(0); // the crowd still plays
+  assert.equal((await resolveTopic(store, id)).by, 'ann');
+  assert.match(resultsComment(await new Feud(store, 'p2', null, T0).results(), await resolveTopic(store, id)), /suggested by u\/ann/);
+});
+
+test('streaks count consecutive days, reset after a gap, and wins go to the winning side', async () => {
+  const store = memoryStore();
+  for (const [post, day] of [['d1', 1], ['d2', 2], ['d3', 3], ['d5', 5]] as const) await Feud.open(store, post, 'cats-dogs', day);
+  const swear = (post: string) => new Feud(store, post, 'ann', T0).chooseSide('a');
+  assert.equal((await swear('d1'))!.streak, 1);
+  assert.equal(await swear('d1'), null); // same day, nothing new
+  assert.equal((await swear('d2'))!.streak, 2);
+  assert.equal((await swear('d3'))!.streak, 3);
+  const gap = (await swear('d5'))!;
+  assert.equal(gap.streak, 1); assert.equal(gap.best, 3);
+  await new Feud(store, 'd5', 'bob', T0).chooseSide('b');
+  const r = await new Feud(store, 'd5', null, T0).results();
+  const winners = await new Feud(store, 'd5', null, T0).creditWinners({ ...r, a: 40, b: 30 });
+  assert.deepEqual(winners.map((w) => w.name), ['ann']);
+  assert.equal(winners[0].record.wins, 1);
+  assert.deepEqual(await new Feud(store, 'd5', null, T0).creditWinners({ ...r, a: 30, b: 30 }), []);
+  assert.equal(flairText(winners[0].record), 'Feudlands: 1 day at war, 1 win');
+  assert.equal(flairText({ streak: 4, best: 4, wins: 0, lastDay: 9 }), 'Feudlands: 4 days at war');
+  assert.equal((await new Feud(store, 'd5', 'ann', T0).state(0)).me.record?.wins, 1);
 });

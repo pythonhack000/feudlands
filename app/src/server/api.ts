@@ -1,6 +1,6 @@
 // The game's HTTP API. Every route answers with the same envelope: { ok, data } or { ok, error }.
 import { Hono, type Context } from 'hono';
-import type { Envelope } from '../shared/rules.ts';
+import type { Envelope, FighterRecord } from '../shared/rules.ts';
 import { Feud, FeudError, type Store } from './feud.ts';
 
 export interface ApiDeps {
@@ -10,6 +10,8 @@ export interface ApiDeps {
   username(c: Context): Promise<string | null>;
   /** Posts a comment under the feud as the player who asked. */
   commentAsUser(postId: string, text: string): Promise<void>;
+  /** Puts a fighter's record in their subreddit flair. */
+  setFlair(username: string, record: FighterRecord): Promise<void>;
 }
 
 export function api(deps: ApiDeps): Hono {
@@ -31,7 +33,13 @@ export function api(deps: ApiDeps): Hono {
   const after = (c: Context) => Math.max(0, Number.parseInt(c.req.query('after') ?? '0', 10) || 0);
 
   app.get('/state', handle((feud, _body, c) => feud.state(after(c))));
-  app.post('/side', handle(async (feud, body, c) => { await feud.chooseSide(body.side); return feud.state(after(c)); }));
+  app.post('/side', handle(async (feud, body, c) => {
+    const record = await feud.chooseSide(body.side);
+    const state = await feud.state(after(c));
+    if (record && state.me.name) await deps.setFlair(state.me.name, record);
+    return state;
+  }));
+  app.post('/suggest', handle(async (feud, body, c) => { await feud.suggest(body.question, body.a, body.b); return feud.state(after(c)); }));
   app.post('/build', handle(async (feud, body, c) => { await feud.build(body.kind, body.q, body.r); return feud.state(after(c)); }));
   app.post('/charge', handle(async (feud, body, c) => { await feud.charge(body.q, body.r, body.cry ?? null); return feud.state(after(c)); }));
   app.post('/argue', handle(async (feud, body, c) => ({ id: await feud.argue(body.text, body.parent ?? null), state: await feud.state(after(c)) })));

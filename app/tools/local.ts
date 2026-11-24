@@ -7,8 +7,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { api } from '../src/server/api.ts';
 import { memoryStore } from '../src/server/memoryStore.ts';
-import { Feud, resultsComment } from '../src/server/feud.ts';
-import { topicById } from '../src/shared/topics.ts';
+import { Feud, flairText, resolveTopic, resultsComment } from '../src/server/feud.ts';
 
 const PORT = Number(process.env.PORT ?? 5190);
 const store = memoryStore();
@@ -18,11 +17,12 @@ app.route('/api', api({
   postId: () => 'local',
   username: async (c) => getCookie(c, 'as') ?? 'local_player',
   commentAsUser: async (postId, text) => { console.log(`[comment on ${postId}] ${text}`); },
+  setFlair: async (username, record) => { console.log(`[flair u/${username}] ${flairText(record)}`); },
 }));
 app.use('/*', serveStatic({ root: './dist/client' }));
 
 const local = () => new Feud(store, 'local', null);
-app.get('/local/results', async (c) => c.text(resultsComment(await local().results(), topicById(await local().winner()).question)));
+app.get('/local/results', async (c) => c.text(resultsComment(await local().results(), await resolveTopic(store, await local().winner()))));
 // Switch the local feud's topic before anyone opens it: /local/open?topic=pineapple&day=13
 app.get('/local/open', async (c) => { await Feud.open(store, 'local', c.req.query('topic') ?? 'cats-dogs', Number(c.req.query('day') ?? 1)); return c.text('ok'); });
 

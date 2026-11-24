@@ -25,6 +25,9 @@
   .rope::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink); opacity: .6; }
   .pct { font-variant-numeric: tabular-nums; }
   .you { font-style: italic; color: var(--ink-soft); font-size: 14px; margin-top: 4px; min-height: 40px; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .feud-by { margin: -2px 0 4px; font-style: italic; font-size: 13px; color: var(--ink-soft); }
+  .suggest .write { margin-top: 6px; }
+  .suggest .write input { min-width: 0; }
   .ballot { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; }
   .ballot button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: inherit; text-align: left; color: var(--ink); background: none; border: 1px solid rgba(58,42,28,.35); padding: 8px 12px; cursor: pointer; }
   .ballot button[aria-pressed="true"] { border-color: var(--ink); background: rgba(58,42,28,.07); }
@@ -118,6 +121,7 @@
   <header>
     <div class="top"><span class="brand">Feudlands</span><span class="day">Day <span id="dayNo">12</span>, <span id="here">1</span> at war</span></div>
     <h1 id="question">Cats or dogs?</h1>
+    <p class="feud-by" id="feudBy" hidden></p>
     <div class="tug">
       <span class="side a"><svg width="14" height="17" viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#2f5d8a"/></svg><span id="nameA">Cats</span> <span class="pct" id="pctA">50%</span></span>
       <div class="rope"><span id="rope" style="width:50%"></span></div>
