@@ -40,6 +40,7 @@
   .card { flex: 1; background: rgba(255,250,236,.55); border: 1px solid rgba(58,42,28,.35); padding: 6px 6px 8px; text-align: center; cursor: pointer; font: inherit; color: inherit; transition: transform .15s, border-color .15s; }
   .card canvas { width: 56px; height: 56px; margin: 0 auto; display: block; }
   .card b { display: block; font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 18px; }
+  .card .count { font-family: 'IM Fell English', serif; font-size: 16px; color: var(--ink-soft); }
   .card small { display: block; font-size: 13px; line-height: 1.15; color: var(--ink-soft); }
   .card[aria-pressed="true"] { border-color: var(--ink); transform: translateY(-4px); box-shadow: 0 6px 14px -10px var(--ink); }
   .card:disabled { opacity: .4; cursor: default; }
@@ -519,19 +520,28 @@ const hand = [{ kind: 'camp', used: false }, { kind: 'tower', used: false }, { k
 const cardsEl = document.getElementById('cards'), statusEl = document.getElementById('status');
 let myPoints = 0;
 const pickedKind = () => (picked === null ? null : hand[picked].kind);
+// Identical pieces stack into one card with a count, so council rallies never crowd the hand.
+const HAND_ORDER = ['camp', 'tower', 'charge'];
 function renderCards() {
   cardsEl.innerHTML = '';
-  hand.forEach((slot, i) => {
+  HAND_ORDER.forEach((kind) => {
+    const slots = hand.map((slot, i) => ({ slot, i })).filter(({ slot }) => slot.kind === kind);
+    if (!slots.length) return;
+    const free = slots.filter(({ slot }) => !slot.used);
+    const fromCouncil = free.filter(({ slot }) => slot.rally).length;
+    const isPicked = picked !== null && hand[picked].kind === kind;
     const b = document.createElement('button');
-    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(picked === i)); b.disabled = slot.used || !mySide;
+    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(isPicked)); b.disabled = !free.length || !mySide;
     const cv = document.createElement('canvas'); cv.width = 112; cv.height = 112; b.append(cv);
-    b.insertAdjacentHTML('beforeend', `<b>${KINDS[slot.kind].name}</b><small>${slot.used ? 'Placed' : slot.rally ? 'Sent by the council' : KINDS[slot.kind].rule}</small>`);
-    b.onclick = () => { picked = picked === i ? null : i; statusEl.textContent = picked === null ? '' : slot.kind === 'charge' ? 'Pick an enemy hex that touches your land.' : 'Place it to box in an enemy camp.'; renderCards(); draw(); };
+    const count = free.length > 1 ? ` <span class="count">\u00d7${free.length}</span>` : '';
+    const note = !free.length ? 'Placed' : fromCouncil ? `${KINDS[kind].rule}. ${fromCouncil} sent by the council` : KINDS[kind].rule;
+    b.insertAdjacentHTML('beforeend', `<b>${KINDS[kind].name}${count}</b><small>${note}</small>`);
+    b.onclick = () => { picked = isPicked ? null : free[0].i; statusEl.textContent = picked === null ? '' : kind === 'charge' ? 'Pick an enemy hex that touches your land.' : 'Place it to box in an enemy camp.'; renderCards(); draw(); };
     cardsEl.append(b);
     const prev = g, saved = size; g = cv.getContext('2d'); size = 20;
     const hex = [...Array(6)].map((_, k) => { const a = Math.PI / 180 * (60 * k - 30); return { x: 56 + 50 * Math.cos(a), y: 56 + 50 * Math.sin(a) }; });
     wash(hex, C.land, rng(5), 0.35, 3);
-    drawPiece(slot.kind, mySide || 'a', { x: 56, y: 62 }, 44, rng(9));
+    drawPiece(kind, mySide || 'a', { x: 56, y: 62 }, 44, rng(9));
     g = prev; size = saved;
   });
 }
@@ -605,10 +615,12 @@ const args = [
 const sideVotes = (side) => args.filter((a) => a.side === side).reduce((n, a) => n + Math.max(0, a.votes), 0);
 const reinforcements = (side) => Math.floor(sideVotes(side) / RALLY_EVERY);
 let grantedRally = 0;
+const MAX_RALLY_CHARGES = 3; // council reinforcements per fighter per day
+const rallyCharges = () => hand.filter((s) => s.rally).length;
 function syncRally() {
-  // Each rally earned by your side's arguments puts one more camp in your hand.
+  // Each rally earned by your side's arguments puts one more charge in your hand, up to MAX_RALLY_CHARGES a day.
   if (!mySide) return;
-  const owed = reinforcements(mySide) - grantedRally;
+  const owed = Math.min(reinforcements(mySide) - grantedRally, MAX_RALLY_CHARGES - rallyCharges());
   for (let i = 0; i < owed; i++) hand.push({ kind: 'charge', used: false, rally: true });
   if (owed > 0) { grantedRally += owed; statusEl.textContent = `The council rallied the ${SIDES[mySide].name.toLowerCase()}: +${owed} charge in your hand.`; renderCards(); }
 }
