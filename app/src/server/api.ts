@@ -35,6 +35,8 @@ export function api(deps: ApiDeps): Hono {
   app.post('/build', handle(async (feud, body, c) => { await feud.build(body.kind, body.q, body.r); return feud.state(after(c)); }));
   app.post('/charge', handle(async (feud, body, c) => { await feud.charge(body.q, body.r, body.cry ?? null); return feud.state(after(c)); }));
   app.post('/argue', handle(async (feud, body, c) => ({ id: await feud.argue(body.text, body.parent ?? null), state: await feud.state(after(c)) })));
+  app.get('/feud', handle((feud) => feud.info()));
+  app.post('/next', handle(async (feud, body, c) => { await feud.voteNext(body.topic); return feud.state(after(c)); }));
   app.post('/vote', handle(async (feud, body, c) => { await feud.vote(body.id, body.dir); return feud.state(after(c)); }));
   // Share: the brag goes up as the player's own comment under the feud.
   app.post('/share', handle(async (feud, _body, _c, post) => {

@@ -25,6 +25,10 @@
   .rope::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink); opacity: .6; }
   .pct { font-variant-numeric: tabular-nums; }
   .you { font-style: italic; color: var(--ink-soft); font-size: 14px; margin-top: 4px; min-height: 40px; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .ballot { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; }
+  .ballot button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: inherit; text-align: left; color: var(--ink); background: none; border: 1px solid rgba(58,42,28,.35); padding: 8px 12px; cursor: pointer; }
+  .ballot button[aria-pressed="true"] { border-color: var(--ink); background: rgba(58,42,28,.07); }
+  .ballot small { font-style: italic; color: var(--ink-soft); white-space: nowrap; }
   .you #rank { display: block; min-height: 19px; white-space: normal; }
   .map-wrap { position: relative; flex: 1; min-height: 0; }
   canvas#map { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -112,7 +116,7 @@
 <body>
 <main>
   <header>
-    <div class="top"><span class="brand">Feudlands</span><span class="day">Day 12, <span id="here">31</span> at war</span></div>
+    <div class="top"><span class="brand">Feudlands</span><span class="day">Day <span id="dayNo">12</span>, <span id="here">1</span> at war</span></div>
     <h1 id="question">Cats or dogs?</h1>
     <div class="tug">
       <span class="side a"><svg width="14" height="17" viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#2f5d8a"/></svg><span id="nameA">Cats</span> <span class="pct" id="pctA">50%</span></span>
@@ -134,13 +138,13 @@
   </div>
   <section class="pick" id="pick">
     <p>Today's feud splits the subreddit in two. Pick a side, then take the island for it.</p>
-    <h2 class="q">Cats or dogs?</h2>
+    <h2 class="q" id="pickQuestion">Cats or dogs?</h2>
     <div class="sides">
-      <button type="button" data-side="a"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#2f5d8a" stroke="#3a2a1c" stroke-width="2"/><path d="M17 24l4-9 4 7h4l4-7 4 9c3 9-2 17-10 17s-13-8-10-17z" fill="none" stroke="#efe3c8" stroke-width="2"/></svg><b>Cats</b><small>&nbsp;</small></button>
-      <button type="button" data-side="b"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#b5452f" stroke="#3a2a1c" stroke-width="2"/><path d="M16 18c-4 2-4 10 0 12M38 18c4 2 4 10 0 12M18 16c3-3 15-3 18 0 3 8 1 20-9 22-10-2-12-14-9-22z" fill="none" stroke="#efe3c8" stroke-width="2"/></svg><b>Dogs</b><small>&nbsp;</small></button>
+      <button type="button" data-side="a"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#2f5d8a" stroke="#3a2a1c" stroke-width="2"/><g class="glyph"><path d="M17 24l4-9 4 7h4l4-7 4 9c3 9-2 17-10 17s-13-8-10-17z" fill="none" stroke="#efe3c8" stroke-width="2"/></g></svg><b>Cats</b><small>&nbsp;</small></button>
+      <button type="button" data-side="b"><svg viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#b5452f" stroke="#3a2a1c" stroke-width="2"/><g class="glyph"><path d="M16 18c-4 2-4 10 0 12M38 18c4 2 4 10 0 12M18 16c3-3 15-3 18 0 3 8 1 20-9 22-10-2-12-14-9-22z" fill="none" stroke="#efe3c8" stroke-width="2"/></g></svg><b>Dogs</b><small>&nbsp;</small></button>
     </div>
     <p class="next" id="pickNote" role="status"></p>
-    <p class="next">Tomorrow's feud is up for a vote: <em>Pineapple on pizza?</em></p>
+    <p class="next" id="pickNext"></p>
   </section>
 </main>
 <script type="module" src="./game.js"></script>

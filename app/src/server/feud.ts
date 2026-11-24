@@ -1,10 +1,11 @@
 // The shared war: one island per post, stored as an ordered log of moves.
 // Every client replays the same log onto the same seeded island, so everyone sees the same map.
-import { isCrowd, tallyDay } from '../shared/island.ts';
+import { isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
 import {
-  cryPower, FEUD_DAY, isSide, MAP_REACH, SIDE_NAMES, TEXT_MAX,
-  type Argument, type Move, type NewMove, type Side, type State,
+  cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX,
+  type Argument, type FeudInfo, type Move, type NewMove, type Side, type State,
 } from '../shared/rules.ts';
+import { candidatesAfter, DEFAULT_TOPIC, topicById, type Topic } from '../shared/topics.ts';
 
 /** The slice of Redis this game uses. Devvit's client fits it; tests use a memory copy. */
 export interface Store {
@@ -22,6 +23,7 @@ export interface Store {
 }
 
 export interface Results {
+  feud: FeudInfo;
   a: number; b: number;
   sworn: Record<Side, number>;
   general: { name: string; hexes: number } | null;
@@ -33,17 +35,18 @@ const hexes = (n: number) => `${n} ${n === 1 ? 'hex' : 'hexes'}`;
 const pct = (n: number, total: number) => Math.round((n / Math.max(1, total)) * 100);
 
 /** The pinned comment that closes the day. Plain Markdown for Reddit. */
-export function resultsComment(r: Results): string {
-  const total = r.a + r.b, win: Side = r.a >= r.b ? 'a' : 'b';
+export function resultsComment(r: Results, tomorrow: string | null = null): string {
+  const total = r.a + r.b, win: Side = r.a >= r.b ? 'a' : 'b', { day, sides } = r.feud;
   const head = r.a === r.b
-    ? `**Midnight, day ${FEUD_DAY}: the island is split, 50% to 50%** (${hexes(r.a)} each).`
-    : `**Midnight, day ${FEUD_DAY}: the ${SIDE_NAMES[win]} hold the island, ${pct(r[win], total)}% to ${100 - pct(r[win], total)}%** (${r[win]} hexes to ${r[win === 'a' ? 'b' : 'a']}).`;
+    ? `**Midnight, day ${day}: the island is split, 50% to 50%** (${hexes(r.a)} each).`
+    : `**Midnight, day ${day}: the ${sides[win].toLowerCase()} hold the island, ${pct(r[win], total)}% to ${100 - pct(r[win], total)}%** (${r[win]} hexes to ${r[win === 'a' ? 'b' : 'a']}).`;
   const lines = [
     r.general ? `- General of the day: u/${r.general.name}, ${hexes(r.general.hexes)} taken` : null,
     r.cry ? `- Cry of the day: \u201c${r.cry.text}\u201d by u/${r.cry.by}${r.cry.hexes ? `, took ${hexes(r.cry.hexes)}` : ''}` : null,
-    `- Sworn in: ${r.sworn.a} for the cats, ${r.sworn.b} for the dogs`,
+    `- Sworn in: ${r.sworn.a} for the ${sides.a.toLowerCase()}, ${r.sworn.b} for the ${sides.b.toLowerCase()}`,
   ].filter(Boolean);
-  return [head, '', ...lines].join('\n');
+  const next = tomorrow ? ['', `Tomorrow's feud, picked by the council: **${tomorrow}**`] : [];
+  return [head, '', ...lines, ...next].join('\n');
 }
 
 export class FeudError extends Error {
@@ -61,18 +64,17 @@ const HERE_WINDOW_MS = 5 * 60 * 1000;
 const LAST_SEQ = Number.MAX_SAFE_INTEGER;
 
 // The council's opening arguments, from the crowd, so a new post isn't empty.
-const SEED_ARGS: [string, Side, string, string, string | null, number][] = [
-  ['s1', 'a', 'quietfox', 'A cat will never make you walk it in the rain at 6 am.', null, 48],
-  ['s2', 'b', 'tea_and_maps', 'Nobody has ever been rescued from a fire by a cat.', null, 44],
-  ['s3', 'a', 'mod_kettle', 'Cats invented the internet. Dogs just chew the cables.', null, 31],
-  ['s4', 'b', 'lofi_owl', 'A dog is happy to see you every single time. Every. Time.', null, 27],
-  ['s5', 'a', 'pixelpuddle', 'Quiet, clean, and judges your life choices for free.', null, 12],
-  ['s6', 'b', 'oldsalt', 'Try taking a cat on a hike.', null, 9],
-  ['s7', 'b', 'nightjar', 'The walk in the rain is the best part of the day. Ask any dog.', 's1', 26],
-  ['s8', 'a', 'sundial', 'Nobody has been rescued from a fire by a goldfish either. Not a job requirement.', 's2', 41],
-  ['s9', 'b', 'cartographer_k', 'Dogs invented loyalty. Try running a forum without it.', 's3', 8],
-  ['s10', 'a', 'fernweh', 'Happy to see you, the mailman, and a sock.', 's4', 19],
-];
+// Ids s1, s2... follow the topic's order; a rebuttal points at the argument it answers.
+type SeedArg = { id: string; side: Side; by: string; text: string; parent: string | null; votes: number };
+function seedArgs(topic: Topic): SeedArg[] {
+  const fighters = { a: NAMES.filter((n) => sideOf(n) === 'a'), b: NAMES.filter((n) => sideOf(n) === 'b') };
+  const used = { a: 0, b: 0 };
+  return topic.openers.map(([side, text, votes, rebuts], i) => ({
+    id: `s${i + 1}`, side, text, votes,
+    by: fighters[side][used[side]++ % fighters[side].length],
+    parent: rebuts === null ? null : `s${rebuts + 1}`,
+  }));
+}
 
 /** Every feud post, scored by when it opened, so midnight knows which days to close. */
 export const POSTS_KEY = 'feud:posts';
@@ -81,7 +83,7 @@ const keys = (post: string) => {
   const k = (name: string) => `feud:${post}:${name}`;
   return {
     meta: k('meta'), seq: k('seq'), moves: k('moves'), sides: k('sides'), seen: k('seen'),
-    args: k('args'), votes: k('votes'), shared: k('shared'), botSlots: k('botslots'), botCount: k('botcount'),
+    args: k('args'), votes: k('votes'), shared: k('shared'), next: k('next'), nextMine: k('nextmine'), botSlots: k('botslots'), botCount: k('botcount'),
     used: (user: string) => k(`used:${user}`), myVotes: (user: string) => k(`uv:${user}`),
   };
 };
@@ -97,12 +99,57 @@ export class Feud {
     this.store = store; this.user = user; this.now = now; this.post = post; this.k = keys(post);
   }
 
+  /** Sets up a brand-new feud post with its topic and day, before anyone opens it. */
+  static async open(store: Store, post: string, topicId: string, day: number): Promise<void> {
+    await store.hSet(keys(post).meta, { topic: topicById(topicId).id, day: String(day) });
+  }
+
+  /** Which feud this post is. Posts from before topics existed are cats or dogs, day 12. */
+  async info(): Promise<FeudInfo> {
+    const meta = await this.store.hGetAll(this.k.meta);
+    const topic = topicById(meta.topic ?? DEFAULT_TOPIC.id), day = Number(meta.day) || LEGACY_DAY;
+    return { day, topic: topic.id, question: topic.question, sides: topic.sides, glyphs: topic.glyphs ?? null };
+  }
+
+  /** Tomorrow's three choices with their votes, and the one you picked. */
+  async next(): Promise<State['next']> {
+    const info = await this.info();
+    const [votes, mine] = await Promise.all([
+      this.store.hGetAll(this.k.next),
+      this.user ? this.store.hGet(this.k.nextMine, this.user) : Promise.resolve(undefined),
+    ]);
+    return {
+      choices: candidatesAfter(info.topic).map((t) => ({ id: t.id, question: t.question, votes: Number(votes[t.id] ?? 0) })),
+      mine: mine ?? null,
+    };
+  }
+
+  /** One vote per fighter for tomorrow's feud; voting again moves it. */
+  async voteNext(topicId: unknown): Promise<void> {
+    const user = this.fighter();
+    const { choices } = await this.next();
+    if (!choices.some((c) => c.id === topicId)) throw new FeudError('That feud isn\u2019t on tomorrow\u2019s ballot');
+    const before = await this.store.hGet(this.k.nextMine, user);
+    if (before === topicId) return;
+    if (before) await this.store.hIncrBy(this.k.next, before, -1);
+    await this.store.hIncrBy(this.k.next, topicId as string, 1);
+    await this.store.hSet(this.k.nextMine, { [user]: topicId as string });
+  }
+
+  /** The ballot's winner. A tie goes to the earlier choice, so an empty ballot still picks one. */
+  async winner(): Promise<string> {
+    const { choices } = await this.next();
+    return choices.reduce((best, c) => (c.votes > best.votes ? c : best)).id;
+  }
+
   /** Everything after `after` in the log, plus the council and who you are. */
   async state(after: number): Promise<State> {
     await this.seed();
     await this.tickBots();
     if (this.user) await this.store.zAdd(this.k.seen, { member: this.user, score: this.now });
-    const [moves, args, myVotes, sides, here, botCount] = await Promise.all([
+    const [feud, next, moves, args, myVotes, sides, here, botCount] = await Promise.all([
+      this.info(),
+      this.next(),
       this.store.zRange(this.k.moves, after + 1, LAST_SEQ, { by: 'score' }),
       this.args(),
       this.user ? this.store.hGetAll(this.k.myVotes(this.user)) : Promise.resolve({}),
@@ -114,6 +161,7 @@ export class Feud {
     const sworn = { a: 0, b: 0 };
     Object.values(sides).forEach((s) => { if (isSide(s)) sworn[s]++; });
     return {
+      feud, next,
       me: { name: this.user, side: isSide(side) ? side : null },
       sworn,
       moves: moves.map((m) => JSON.parse(m.member) as Move),
@@ -126,7 +174,7 @@ export class Feud {
 
   async chooseSide(side: unknown): Promise<void> {
     const user = this.fighter();
-    if (!isSide(side)) throw new FeudError('Pick cats or dogs');
+    if (!isSide(side)) throw new FeudError('Pick a side');
     await this.store.hSetNX(this.k.sides, user, side); // your first choice stands for the day
   }
 
@@ -186,19 +234,20 @@ export class Feud {
 
   /** The day so far, counted from the whole log: what the midnight comment says. */
   async results(): Promise<Results> {
-    const [moves, args, sides] = await Promise.all([
+    const [feud, moves, args, sides] = await Promise.all([
+      this.info(),
       this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' }),
       this.args(),
       this.store.hGetAll(this.k.sides),
     ]);
-    const day = tallyDay(FEUD_DAY, moves.map((m) => JSON.parse(m.member) as Move));
+    const day = tallyDay(feud.day, moves.map((m) => JSON.parse(m.member) as Move));
     const players = Object.entries(day.hexes).filter(([name, n]) => !isCrowd(name) && n > 0).sort((x, y) => y[1] - x[1]);
     const said = args.filter((a) => a.parent === null && !isCrowd(a.by));
     const best = said.map((a) => ({ a, hexes: day.cries[a.id] ?? 0 })).sort((x, y) => y.hexes - x.hexes || y.a.votes - x.a.votes)[0];
     const sworn = { a: 0, b: 0 };
     Object.values(sides).forEach((s) => { if (isSide(s)) sworn[s]++; });
     return {
-      a: day.a, b: day.b, sworn,
+      feud, a: day.a, b: day.b, sworn,
       general: players[0] ? { name: players[0][0], hexes: players[0][1] } : null,
       cry: best ? { text: best.a.text, by: best.a.by, side: best.a.side, hexes: best.hexes } : null,
       hexes: day.hexes,
@@ -210,10 +259,11 @@ export class Feud {
     const user = this.fighter(), side = await this.sideOf(user);
     const r = await this.results(), mine = r.hexes[user] ?? 0;
     if (!mine) throw new FeudError('Take a hex first, then brag');
-    const lead = side === 'a' ? r.a - r.b : r.b - r.a, sign = `Feudlands, day ${FEUD_DAY}`;
+    const name = r.feud.sides[side].toLowerCase(), sign = `Feudlands, day ${r.feud.day}`;
+    const lead = side === 'a' ? r.a - r.b : r.b - r.a;
     const text = lead > 0 && mine >= lead
-      ? `I was the margin: the ${SIDE_NAMES[side]} lead by ${hexes(lead)} and I took ${mine}. ${sign}`
-      : `I took ${hexes(mine)} for the ${SIDE_NAMES[side]}. ${sign}`;
+      ? `I was the margin: the ${name} lead by ${hexes(lead)} and I took ${mine}. ${sign}`
+      : `I took ${hexes(mine)} for the ${name}. ${sign}`;
     if (!(await this.store.hSetNX(this.k.shared, user, text))) throw new FeudError('You already shared today', 429);
     return text;
   }
@@ -259,7 +309,7 @@ export class Feud {
     if (!(await this.store.hSetNX(this.k.meta, 'seeded', '1'))) return;
     await this.store.zAdd(POSTS_KEY, { member: this.post, score: this.now });
     const rows: Record<string, string> = {}, votes: Record<string, string> = {};
-    for (const [id, side, by, text, parent, v] of SEED_ARGS) {
+    for (const { id, side, by, text, parent, votes: v } of seedArgs(topicById((await this.info()).topic))) {
       rows[id] = JSON.stringify({ id, side, by, text, parent, at: this.now });
       votes[id] = String(v);
     }
@@ -276,8 +326,8 @@ export class Feud {
     const seed = (slot * 2654435761) >>> 0;
     await this.append({ t: 'bot', seed, by: 'crowd', side: null });
     if (seed % 100 < BOT_VOTE_CHANCE * 100) {
-      const [id] = SEED_ARGS[seed % SEED_ARGS.length];
-      await this.store.hIncrBy(this.k.votes, id, 1 + (seed % 3));
+      const openers = topicById((await this.info()).topic).openers.length;
+      await this.store.hIncrBy(this.k.votes, `s${1 + (seed % openers)}`, 1 + (seed % 3));
     }
   }
 }

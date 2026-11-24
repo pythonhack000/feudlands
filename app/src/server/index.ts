@@ -4,24 +4,41 @@ import { context, createServer, getServerPort, reddit, redis } from '@devvit/web
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
 import { Feud, POSTS_KEY, resultsComment } from './feud.ts';
-
-const FEUD_TITLE = 'Feudlands: Cats or dogs? Pick a side and take the island';
+import { DEFAULT_TOPIC, topicById } from '../shared/topics.ts';
 
 /** Feuds older than this have had their midnight. */
 const OPEN_FOR_MS = 36 * 60 * 60 * 1000;
+const DAILY_KEY = 'feud:daily';
 
-async function postFeud(): Promise<string> {
-  const post = await reddit.submitCustomPost({ title: FEUD_TITLE, entry: 'default' });
+const titleOf = (topicId: string, day: number) => `Feudlands, day ${day}: ${topicById(topicId).question} Pick a side and take the island`;
+
+/** The latest feud post, which holds tomorrow's ballot. */
+async function newestFeud(): Promise<string | null> {
+  const posts = await redis.zRange(POSTS_KEY, 0, Number.MAX_SAFE_INTEGER, { by: 'score' });
+  return posts.at(-1)?.member ?? null;
+}
+
+/** What to post next: the latest feud's ballot winner, one day later. The very first feud is cats or dogs, day 1. */
+async function nextFeud(): Promise<{ topic: string; day: number }> {
+  const newest = await newestFeud();
+  if (!newest) return { topic: DEFAULT_TOPIC.id, day: 1 };
+  const feud = new Feud(redis, newest, null);
+  return { topic: await feud.winner(), day: (await feud.info()).day + 1 };
+}
+
+async function postFeud(topic: string, day: number): Promise<string> {
+  const post = await reddit.submitCustomPost({ title: titleOf(topic, day), entry: 'default' });
+  await Feud.open(redis, post.id, topic, day);
   await redis.zAdd(POSTS_KEY, { member: post.id, score: Date.now() });
   return post.id;
 }
 
 /** Pins the day's result under a feud, once. */
-async function closeDay(postId: string): Promise<boolean> {
+async function closeDay(postId: string, tomorrow: string | null): Promise<boolean> {
   const doneKey = `feud:${postId}:closed`;
   if (await redis.get(doneKey)) return false;
   const results = await new Feud(redis, postId, null).results();
-  const comment = await reddit.submitComment({ id: postId as `t3_${string}`, text: resultsComment(results), runAs: 'APP' });
+  const comment = await reddit.submitComment({ id: postId as `t3_${string}`, text: resultsComment(results, tomorrow), runAs: 'APP' });
   await comment.distinguish(true);
   await redis.set(doneKey, comment.id);
   return true;
@@ -33,7 +50,8 @@ const internal = new Hono();
 
 internal.post('/menu/post-feud', async (c) => {
   try {
-    const postId = await postFeud();
+    const { topic, day } = await nextFeud();
+    const postId = await postFeud(topic, day);
     return c.json<UiResponse>({ navigateTo: postUrl(postId) }, 200);
   } catch (error) {
     console.error('Could not post the feud', error);
@@ -43,7 +61,8 @@ internal.post('/menu/post-feud', async (c) => {
 
 internal.post('/triggers/on-app-install', async (c) => {
   try {
-    const postId = await postFeud();
+    const { topic, day } = await nextFeud();
+    const postId = await postFeud(topic, day);
     return c.json<TriggerResponse>({ status: 'success', message: `Feud posted as ${postId}` }, 200);
   } catch (error) {
     console.error('Could not post the first feud', error);
@@ -51,22 +70,35 @@ internal.post('/triggers/on-app-install', async (c) => {
   }
 });
 
+// Midnight: pin the results under every open feud, then post tomorrow's feud, the one the council voted for.
 internal.post('/scheduler/midnight', async (c) => {
-  const since = Date.now() - OPEN_FOR_MS;
-  const posts = await redis.zRange(POSTS_KEY, since, Date.now(), { by: 'score' });
+  const now = Date.now(), newest = await newestFeud(), plan = await nextFeud();
+  const posts = await redis.zRange(POSTS_KEY, now - OPEN_FOR_MS, now, { by: 'score' });
   let closed = 0;
   for (const { member: postId } of posts) {
-    try { if (await closeDay(postId)) closed++; }
+    try { if (await closeDay(postId, postId === newest ? topicById(plan.topic).question : null)) closed++; }
     catch (error) { console.error(`Could not close the day for ${postId}`, error); }
   }
-  return c.json({ status: 'ok', closed }, 200);
+  // One new feud per UTC date, even if the task fires twice.
+  const date = new Date(now).toISOString().slice(0, 10);
+  let posted: string | null = null;
+  if (await redis.hSetNX(DAILY_KEY, date, 'posting')) {
+    try {
+      posted = await postFeud(plan.topic, plan.day);
+      await redis.hSet(DAILY_KEY, { [date]: posted });
+    } catch (error) {
+      await redis.hDel(DAILY_KEY, [date]);
+      console.error('Could not post tomorrow\u2019s feud', error);
+    }
+  }
+  return c.json({ status: 'ok', closed, posted }, 200);
 });
 
 internal.post('/menu/close-day', async (c) => {
   const postId = context.postId;
   if (!postId) return c.json<UiResponse>({ showToast: 'Use this on a feud post' }, 400);
   try {
-    const done = await closeDay(postId);
+    const done = await closeDay(postId, postId === (await newestFeud()) ? topicById((await nextFeud()).topic).question : null);
     return c.json<UiResponse>({ showToast: done ? 'Results pinned under the feud' : 'This feud already has its results' }, 200);
   } catch (error) {
     console.error('Could not close the day', error);

@@ -1,16 +1,17 @@
 import * as I from '../shared/island.ts';
-import { CRY_VOTES, FEUD_DAY } from '../shared/rules.ts';
+import { CRY_VOTES, LEGACY_DAY } from '../shared/rules.ts';
 
 const { rng, hash, DIRS, NAMES, sideOf, isFree, STRENGTH, HOME } = I;
 
 const C = { ink: '#3a2a1c', inkSoft: '#7a6347', sea: '#6f9a95', land: '#e6d3a3', paper: '#efe3c8' };
 const SIDES = { a: { name: 'Cats', ink: '#2f5d8a' }, b: { name: 'Dogs', ink: '#b5452f' } };
-const TODAY = FEUD_DAY, INK_MS = 700, LABEL_MS = 2600, BATTLE_MS = 3400;
+let TODAY = LEGACY_DAY; // the post's day, set when the feud loads
+const INK_MS = 700, LABEL_MS = 2600, BATTLE_MS = 3400;
 const battles = [];
 
 // ---------- today's island and its rules (shared with the server) ----------
 const EDGE = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]];
-const cells = I.makeIsland(TODAY);
+const cells = I.makeIsland(TODAY); // rebuilt for the post's own day in setFeud()
 const cell = (q, r) => I.cellAt(cells, q, r);
 const landNeighbours = (c) => I.landNeighbours(cells, c);
 const KINDS = {
@@ -336,6 +337,57 @@ function crowdMove(seed) {
   else move(choice.c, choice.kind, choice.side, choice.by);
 }
 
+// ---------- which feud this post is: question, sides and day come from the server ----------
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function setFeud(feud) {
+  TODAY = feud.day;
+  cells.clear();
+  I.makeIsland(TODAY).forEach((c, k) => cells.set(k, c)); // each day's island has its own coast
+  SIDES.a.name = feud.sides.a; SIDES.b.name = feud.sides.b;
+  document.title = `Feudlands: ${feud.question}`;
+  for (const id of ['question', 'pickQuestion']) { const el = document.getElementById(id); if (el) el.textContent = feud.question; }
+  document.getElementById('dayNo').textContent = String(feud.day);
+  document.getElementById('nameA').textContent = feud.sides.a;
+  document.getElementById('nameB').textContent = feud.sides.b;
+  document.querySelectorAll('#pick [data-side]').forEach((btn) => {
+    const side = btn.dataset.side;
+    btn.querySelector('b').textContent = feud.sides[side];
+    const glyph = btn.querySelector('.glyph');
+    glyph.replaceChildren();
+    if (feud.glyphs) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      Object.entries({ d: feud.glyphs[side], fill: 'none', stroke: '#efe3c8', 'stroke-width': '2' }).forEach(([k, v]) => path.setAttribute(k, v));
+      glyph.append(path);
+    } else {
+      const letter = document.createElementNS(SVG_NS, 'text');
+      Object.entries({ x: '27', y: '38', 'text-anchor': 'middle', fill: '#efe3c8', 'font-size': '24', 'font-family': 'IM Fell English SC, serif' }).forEach(([k, v]) => letter.setAttribute(k, v));
+      letter.textContent = feud.sides[side].charAt(0);
+      glyph.append(letter);
+    }
+  });
+}
+// Tomorrow's ballot: three feuds, one vote each, and the winner is posted at midnight.
+let ballot = { choices: [], mine: null };
+function setBallot(next) {
+  ballot = next;
+  const lead = [...next.choices].sort((x, y) => y.votes - x.votes)[0];
+  const el = document.getElementById('pickNext');
+  if (el && lead) el.innerHTML = `Tomorrow's feud is up for a vote. Leading: <em>${lead.question.replace(/[<>&]/g, '')}</em>`;
+}
+function renderBallot(box) {
+  box.replaceChildren(...ballot.choices.map((choice) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('aria-pressed', String(ballot.mine === choice.id));
+    b.innerHTML = `<span>${choice.question.replace(/[<>&]/g, '')}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}</small>`;
+    b.onclick = async () => {
+      const note = box.nextElementSibling;
+      try { applyState(await api(`next?${after()}`, { topic: choice.id })); renderBallot(box); note.textContent = 'Your vote is in. You can change it until midnight.'; }
+      catch (error) { note.textContent = error.message; }
+    };
+    return b;
+  }));
+}
+
 // ---------- the shared war: the server keeps the log, every client replays it ----------
 const POLL_MS = 3000;
 let myName = null, lastSeq = 0, replaying = false, busy = false, quietShown = false;
@@ -378,6 +430,7 @@ function spend(kind, gained) {
 }
 function applyState(state) {
   myName = state.me.name;
+  setBallot(state.next);
   setCouncil(state.args, state.myVotes);
   const results = state.moves.filter((m) => m.seq > lastSeq).map((m) => ({ m, gained: applyMove(m) }));
   setCouncil(state.args, state.myVotes); // again, so cries carry the hexes they just took
@@ -820,10 +873,13 @@ function openMidnight() {
     <p>At 00:00 UTC the war stops and this goes up as a pinned comment under the post.</p>
     <img alt="The island at midnight" style="width:100%;border:1px solid rgba(58,42,28,.3)" src="${canvas.toDataURL('image/png')}" />
     <h2 style="color:${a === b ? C.ink : SIDES[win].ink}">${a === b ? 'The island is split, 50% to 50%' : `The ${SIDES[win].name.toLowerCase()} hold the island, ${pa}% to ${100 - pa}%`}</h2>
-    <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken</small></div></div>
+    <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${genStat.today ? `${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken` : 'Nobody yet. Take one hex and it\u2019s you.'}</small></div></div>
     <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
     <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share as a comment</button><span role="status"></span></p>` : ''}</div></div>
-    <p>Tomorrow's feud: <em>Pineapple on pizza?</em></p>`);
+    <h2>Tomorrow's feud</h2>
+    <p>Vote for what the island fights over tomorrow. The winner goes up as a new post at midnight.</p>
+    <div class="ballot"></div><p class="councilNote" role="status"></p>`);
+  renderBallot(el.querySelector('.ballot'));
   const brag = el.querySelector('.brag');
   if (brag) brag.querySelector('button').onclick = () => shareLine(brag.querySelector('span'), brag.querySelector('button'));
   return el;
@@ -835,6 +891,8 @@ async function start() {
     replaying = true;
     const state = await api('state');
     myName = state.me.name;
+    setFeud(state.feud);
+    layout();
     if (state.me.side) joinSide(state.me.side); // your side from earlier today
     applyState(state);
   } catch (error) {

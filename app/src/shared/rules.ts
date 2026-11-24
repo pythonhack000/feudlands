@@ -4,9 +4,11 @@ export type Side = 'a' | 'b';
 export const SIDES: readonly Side[] = ['a', 'b'];
 export const isSide = (value: unknown): value is Side => value === 'a' || value === 'b';
 
-/** Today's feud number, shown in the game and the results. */
-export const FEUD_DAY = 12;
-export const SIDE_NAMES: Record<Side, string> = { a: 'cats', b: 'dogs' };
+/** The day number of feud posts made before days were counted. */
+export const LEGACY_DAY = 12;
+
+/** Which feud a post is fighting. */
+export type FeudInfo = { day: number; topic: string; question: string; sides: Record<Side, string>; glyphs: Record<Side, string> | null };
 
 /** Every this many upvotes make a battle cry 1 stronger. */
 export const CRY_VOTES = 20;
@@ -30,6 +32,9 @@ export type Move = NewMove & { seq: number; at: number };
 export type Argument = { id: string; side: Side; by: string; text: string; parent: string | null; at: number; votes: number };
 
 export type State = {
+  feud: FeudInfo;
+  /** Tomorrow's ballot. */
+  next: { choices: { id: string; question: string; votes: number }[]; mine: string | null };
   me: { name: string | null; side: Side | null };
   moves: Move[];
   args: Argument[];

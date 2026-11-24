@@ -8,6 +8,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { api } from '../src/server/api.ts';
 import { memoryStore } from '../src/server/memoryStore.ts';
 import { Feud, resultsComment } from '../src/server/feud.ts';
+import { topicById } from '../src/shared/topics.ts';
 
 const PORT = Number(process.env.PORT ?? 5190);
 const store = memoryStore();
@@ -20,6 +21,9 @@ app.route('/api', api({
 }));
 app.use('/*', serveStatic({ root: './dist/client' }));
 
-app.get('/local/results', async (c) => c.text(resultsComment(await new Feud(store, 'local', null).results())));
+const local = () => new Feud(store, 'local', null);
+app.get('/local/results', async (c) => c.text(resultsComment(await local().results(), topicById(await local().winner()).question)));
+// Switch the local feud's topic before anyone opens it: /local/open?topic=pineapple&day=13
+app.get('/local/open', async (c) => { await Feud.open(store, 'local', c.req.query('topic') ?? 'cats-dogs', Number(c.req.query('day') ?? 1)); return c.text('ok'); });
 
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`Feudlands local war on http://localhost:${PORT}/game.html`));

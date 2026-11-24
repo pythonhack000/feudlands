@@ -98,7 +98,7 @@ test('the crowd moves once per tick however many people watch, and stops for the
 
 import { resultsComment } from '../src/server/feud.ts';
 import { isFree, makeIsland, tallyDay, wouldCapture } from '../src/shared/island.ts';
-import { FEUD_DAY } from '../src/shared/rules.ts';
+import { LEGACY_DAY as FEUD_DAY } from '../src/shared/rules.ts';
 
 
 test('the crowd plays the same day the same way every time', async () => {
@@ -139,10 +139,47 @@ test('share refuses a fighter with nothing taken, and only brags once', async ()
   assert.equal(await ann.shareLine(), line);
 });
 
-test('the results comment names the leader and the split', () => {
-  const text = resultsComment({ a: 30, b: 20, sworn: { a: 3, b: 2 }, general: { name: 'ann', hexes: 4 }, cry: { text: 'Meow', by: 'ann', side: 'a', hexes: 2 }, hexes: {} });
-  assert.equal(text, '**Midnight, day 12: the cats hold the island, 60% to 40%** (30 hexes to 20).\n\n- General of the day: u/ann, 4 hexes taken\n- Cry of the day: “Meow” by u/ann, took 2 hexes\n- Sworn in: 3 for the cats, 2 for the dogs');
-  assert.match(resultsComment({ a: 25, b: 25, sworn: { a: 1, b: 1 }, general: null, cry: null, hexes: {} }), /split, 50% to 50%/);
+const CATS = { day: 12, topic: 'cats-dogs', question: 'Cats or dogs?', sides: { a: 'Cats', b: 'Dogs' }, glyphs: null };
+test('the results comment names the leader, the split and tomorrow', () => {
+  const text = resultsComment({ feud: CATS, a: 30, b: 20, sworn: { a: 3, b: 2 }, general: { name: 'ann', hexes: 4 }, cry: { text: 'Meow', by: 'ann', side: 'a', hexes: 2 }, hexes: {} }, 'Pineapple on pizza?');
+  assert.equal(text, '**Midnight, day 12: the cats hold the island, 60% to 40%** (30 hexes to 20).\n\n- General of the day: u/ann, 4 hexes taken\n- Cry of the day: \u201cMeow\u201d by u/ann, took 2 hexes\n- Sworn in: 3 for the cats, 2 for the dogs\n\nTomorrow\'s feud, picked by the council: **Pineapple on pizza?**');
+  assert.match(resultsComment({ feud: CATS, a: 25, b: 25, sworn: { a: 1, b: 1 }, general: null, cry: null, hexes: {} }), /split, 50% to 50%/);
+});
+
+test('a post without a topic is the old cats or dogs feud, day 12', async () => {
+  const info = await new Feud(memoryStore(), 'old', null, T0).info();
+  assert.equal(info.question, 'Cats or dogs?'); assert.equal(info.day, 12);
+});
+
+test('a new feud fights over its own topic, with its own opening arguments', async () => {
+  const store = memoryStore();
+  await Feud.open(store, 'p2', 'pineapple', 13);
+  const st = await new Feud(store, 'p2', 'ann', T0).state(0);
+  assert.equal(st.feud.question, 'Pineapple on pizza?');
+  assert.deepEqual(st.feud.sides, { a: 'Pineapples', b: 'Purists' });
+  assert.equal(st.feud.day, 13);
+  assert.ok(st.args.some((a) => a.text.startsWith('Sweet and salty')));
+  assert.ok(st.args.filter((a) => a.parent).every((r) => st.args.find((a) => a.id === r.parent)!.side !== r.side));
+  const r = await new Feud(store, 'p2', null, T0).results();
+  assert.match(resultsComment(r), /^\*\*Midnight, day 13: /);
+});
+
+test('tomorrow\'s ballot: one vote each, movable, and the most votes wins', async () => {
+  const store = memoryStore();
+  const ann = new Feud(store, 'p', 'ann', T0), bob = new Feud(store, 'p', 'bob', T0), cy = new Feud(store, 'p', 'cy', T0);
+  const { choices } = await ann.next();
+  assert.equal(choices.length, 3);
+  assert.ok(!choices.some((c) => c.id === 'cats-dogs'));
+  assert.equal(await ann.winner(), choices[0].id); // nobody voted: the first choice
+  await ann.voteNext(choices[2].id); await bob.voteNext(choices[2].id); await cy.voteNext(choices[1].id);
+  assert.equal(await ann.winner(), choices[2].id);
+  await ann.voteNext(choices[1].id); await ann.voteNext(choices[1].id);
+  const after = await ann.next();
+  assert.deepEqual(after.choices.map((c) => c.votes), [0, 2, 1]);
+  assert.equal(after.mine, choices[1].id);
+  assert.equal(await ann.winner(), choices[1].id);
+  await assert.rejects(ann.voteNext('cats-dogs'), /ballot/);
+  await assert.rejects(new Feud(store, 'p', null, T0).voteNext(choices[0].id), /Log in/);
 });
 
 test('a feud signs up for midnight the first time anyone opens it', async () => {
