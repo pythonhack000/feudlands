@@ -8,8 +8,8 @@ export interface Topic {
   sides: Record<Side, string>;
   /** Optional drawings for the side shields (SVG path data on a 54x64 shield). Otherwise the first letter is used. */
   glyphs?: Record<Side, string>;
-  /** The council's opening arguments: [side, text, votes, rebuts index or null]. */
-  openers: [Side, string, number, number | null][];
+  /** The council's opening arguments: [side, text, votes, rebuts index or null, author]. Without an author, the crowd says it. */
+  openers: [Side, string, number, number | null, string?][];
   /** Who suggested it, for topics from players. */
   by?: string;
 }

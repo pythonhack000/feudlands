@@ -3,7 +3,7 @@ import { serve } from '@hono/node-server';
 import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
-import { Feud, flairText, POSTS_KEY, resolveTopic, resultsComment } from './feud.ts';
+import { ballotNotice, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment } from './feud.ts';
 import { DEFAULT_TOPIC, type Topic } from '../shared/topics.ts';
 import type { FighterRecord } from '../shared/rules.ts';
 
@@ -57,6 +57,16 @@ async function closeDay(postId: string, tomorrow: Topic | null): Promise<boolean
   return true;
 }
 
+async function isModerator(username: string): Promise<boolean> {
+  try {
+    const subredditName = context.subredditName ?? (await reddit.getCurrentSubreddit()).name;
+    return (await reddit.getModerators({ subredditName, username }).all()).length > 0;
+  } catch (error) {
+    console.error(`Could not check whether ${username} moderates`, error);
+    return false;
+  }
+}
+
 const postUrl = (postId: string) => `https://reddit.com/r/${context.subredditName}/comments/${postId}`;
 
 const internal = new Hono();
@@ -107,6 +117,24 @@ internal.post('/scheduler/midnight', async (c) => {
   return c.json({ status: 'ok', closed, posted }, 200);
 });
 
+// 23:00 UTC: if a player's suggestion is about to become tomorrow's post, tell the moderators while they can still stop it.
+internal.post('/scheduler/ballot-check', async (c) => {
+  try {
+    const newest = await newestFeud();
+    if (!newest) return c.json({ status: 'ok', notified: false }, 200);
+    const { choices } = await new Feud(redis, newest, null).next();
+    const leader = choices.reduce((best, x) => (x.votes > best.votes ? x : best));
+    if (!leader.by) return c.json({ status: 'ok', notified: false }, 200);
+    const notice = ballotNotice(await resolveTopic(redis, leader.id), leader.votes, postUrl(newest));
+    const subredditId = (await reddit.getCurrentSubreddit()).id;
+    await reddit.modMail.createModNotification({ subject: notice.subject, bodyMarkdown: notice.body, subredditId });
+    return c.json({ status: 'ok', notified: true }, 200);
+  } catch (error) {
+    console.error('Could not check tomorrow\u2019s ballot', error);
+    return c.json({ status: 'error' }, 500);
+  }
+});
+
 internal.post('/menu/close-day', async (c) => {
   const postId = context.postId;
   if (!postId) return c.json<UiResponse>({ showToast: 'Use this on a feud post' }, 400);
@@ -126,6 +154,7 @@ app.route('/api', api({
   postId: () => context.postId,
   username: async () => (await reddit.getCurrentUsername()) ?? null,
   setFlair,
+  isModerator,
   commentAsUser: async (postId, text) => {
     await reddit.submitComment({ id: postId as `t3_${string}`, text, runAs: 'USER' });
   },

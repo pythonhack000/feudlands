@@ -12,6 +12,8 @@ export interface ApiDeps {
   commentAsUser(postId: string, text: string): Promise<void>;
   /** Puts a fighter's record in their subreddit flair. */
   setFlair(username: string, record: FighterRecord): Promise<void>;
+  /** Whether this user moderates the subreddit. */
+  isModerator(username: string): Promise<boolean>;
 }
 
 export function api(deps: ApiDeps): Hono {
@@ -39,7 +41,15 @@ export function api(deps: ApiDeps): Hono {
     if (record && state.me.name) await deps.setFlair(state.me.name, record);
     return state;
   }));
-  app.post('/suggest', handle(async (feud, body, c) => { await feud.suggest(body.question, body.a, body.b); return feud.state(after(c)); }));
+  app.post('/suggest', handle(async (feud, body, c) => { await feud.suggest(body.question, body.a, body.b, body.argA, body.argB); return feud.state(after(c)); }));
+  // Moderator tools: who may use them, and striking a player's feud off tomorrow's ballot.
+  const isMod = async (c: Context) => { const name = await deps.username(c); return Boolean(name && (await deps.isModerator(name))); };
+  app.get('/mod', handle(async (_feud, _body, c) => ({ mod: await isMod(c) })));
+  app.post('/unsuggest', handle(async (feud, body, c) => {
+    if (!(await isMod(c))) throw new FeudError('Only moderators can remove a feud from the ballot', 401);
+    await feud.removeSuggestion(body.topic);
+    return feud.state(after(c));
+  }));
   app.post('/build', handle(async (feud, body, c) => { await feud.build(body.kind, body.q, body.r); return feud.state(after(c)); }));
   app.post('/charge', handle(async (feud, body, c) => { await feud.charge(body.q, body.r, body.cry ?? null); return feud.state(after(c)); }));
   app.post('/argue', handle(async (feud, body, c) => ({ id: await feud.argue(body.text, body.parent ?? null), state: await feud.state(after(c)) })));

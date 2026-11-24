@@ -56,6 +56,10 @@
       "midnight": {
         "endpoint": "/internal/scheduler/midnight",
         "cron": "0 0 * * *"
+      },
+      "ballot-check": {
+        "endpoint": "/internal/scheduler/ballot-check",
+        "cron": "0 23 * * *"
       }
     }
   }

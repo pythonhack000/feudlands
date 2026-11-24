@@ -377,8 +377,10 @@ function setBallot(next) {
   if (el && lead) el.innerHTML = `Tomorrow's feud is up for a vote. Leading: <em>${lead.question.replace(/[<>&]/g, '')}</em>`;
 }
 const esc = (t) => String(t).replace(/[<>&]/g, '');
+let isMod = false; // moderators can strike players' feuds off the ballot
 function renderBallot(box) {
   box.replaceChildren(...ballot.choices.map((choice) => {
+    const row = document.createElement('div'); row.className = 'choice';
     const b = document.createElement('button');
     b.type = 'button'; b.setAttribute('aria-pressed', String(ballot.mine === choice.id));
     b.innerHTML = `<span>${esc(choice.question)}${choice.by ? `<small> suggested by ${choice.by === myName ? 'you' : 'u/' + esc(choice.by)}</small>` : ''}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}</small>`;
@@ -387,7 +389,19 @@ function renderBallot(box) {
       try { applyState(await api(`next?${after()}`, { topic: choice.id })); renderBallot(box); note.textContent = 'Your vote is in. You can change it until midnight.'; }
       catch (error) { note.textContent = error.message; }
     };
-    return b;
+    row.append(b);
+    if (isMod && choice.by) {
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.className = 'chip remove'; remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove \u201c${choice.question}\u201d from the ballot`);
+      remove.onclick = async () => {
+        const note = box.nextElementSibling;
+        try { applyState(await api(`unsuggest?${after()}`, { topic: choice.id })); renderBallot(box); note.textContent = 'Removed. The next most voted feud runs instead.'; }
+        catch (error) { note.textContent = error.message; }
+      };
+      row.append(remove);
+    }
+    return row;
   }));
 }
 
@@ -396,14 +410,17 @@ function renderSuggest(box, ballotBox) {
   if (ballot.suggested) { box.innerHTML = '<p>Your feud is on the ballot. Get people to vote for it.</p>'; return; }
   box.innerHTML = `<p>Or suggest your own. If it wins, it goes up tomorrow with your name on it.</p>
     <div class="write"><input name="question" maxlength="90" placeholder="The question, like: Socks with sandals?" aria-label="Your feud's question" /></div>
-    <div class="write"><input name="a" maxlength="24" placeholder="One side" aria-label="First side" /><input name="b" maxlength="24" placeholder="The other" aria-label="Second side" /><button class="vote" type="button">Suggest</button></div>
+    <div class="write"><input name="a" maxlength="24" placeholder="One side" aria-label="First side" /><input name="b" maxlength="24" placeholder="The other" aria-label="Second side" /></div>
+    <p class="hint">Open the war council for both sides: one argument each. They start the debate if your feud wins.</p>
+    <div class="write"><input name="argA" maxlength="120" placeholder="Why the first side wins" aria-label="An argument for the first side" /></div>
+    <div class="write"><input name="argB" maxlength="120" placeholder="Why the other side wins" aria-label="An argument for the second side" /><button class="vote" type="button">Suggest</button></div>
     <p class="suggestNote" role="status"></p>`;
   const field = (name) => box.querySelector(`[name="${name}"]`).value.trim();
   box.querySelector('.vote').onclick = async () => {
     const note = box.querySelector('.suggestNote');
     if (!field('question') || !field('a') || !field('b')) { note.textContent = 'Write a question and name both sides.'; return; }
     try {
-      applyState(await api(`suggest?${after()}`, { question: field('question'), a: field('a'), b: field('b') }));
+      applyState(await api(`suggest?${after()}`, { question: field('question'), a: field('a'), b: field('b'), argA: field('argA'), argB: field('argB') }));
       renderBallot(ballotBox); renderSuggest(box, ballotBox);
     } catch (error) { note.textContent = error.message; }
   };
@@ -927,6 +944,7 @@ async function start() {
     replaying = false;
   }
   if (mySide && hand.some((slot) => slot.used)) afterMove();
+  api('mod').then((m) => { isMod = m.mod; }).catch((error) => console.warn('Could not check moderator status', error));
   tally(); renderCards(); draw();
   setTimeout(poll, POLL_MS);
 }

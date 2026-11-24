@@ -49,6 +49,19 @@ export function resultsComment(r: Results, tomorrow: { question: string; by?: st
   return [head, '', ...lines, ...next].join('\n');
 }
 
+/** The moderators' heads-up an hour before midnight, when tomorrow's feud is a player's suggestion. */
+export function ballotNotice(topic: Topic, votes: number, postUrl: string): { subject: string; body: string } {
+  const lines = [
+    `Tomorrow's feud is leading with ${votes} ${votes === 1 ? 'vote' : 'votes'}. It was suggested by u/${topic.by}, so the app will post their words as the title at 00:00 UTC:`,
+    '',
+    `> **${topic.question}** ${topic.sides.a} or ${topic.sides.b}`,
+    ...topic.openers.map(([side, text]) => `> For the ${topic.sides[side].toLowerCase()}: ${text}`),
+    '',
+    `If it shouldn't run, open [today's feud](${postUrl}), press Midnight, and remove it from the ballot. The next most voted feud runs instead.`,
+  ];
+  return { subject: 'Tomorrow\u2019s Feudlands feud needs a look', body: lines.join('\n') };
+}
+
 export class FeudError extends Error {
   readonly status: 400 | 401 | 404 | 429;
   constructor(message: string, status: 400 | 401 | 404 | 429 = 400) { super(message); this.status = status; }
@@ -62,6 +75,8 @@ const BOT_VOTE_CHANCE = 0.6;
 const LIMITS = { build: 6, charge: 8, args: 12 } as const;
 const HERE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_SUGGESTIONS_SHOWN = 5;
+/** An author's opening argument starts with their own vote. */
+const OPENER_VOTES = 1;
 const LAST_SEQ = Number.MAX_SAFE_INTEGER;
 
 // The council's opening arguments, from the crowd, so a new post isn't empty.
@@ -70,9 +85,9 @@ type SeedArg = { id: string; side: Side; by: string; text: string; parent: strin
 function seedArgs(topic: Topic): SeedArg[] {
   const fighters = { a: NAMES.filter((n) => sideOf(n) === 'a'), b: NAMES.filter((n) => sideOf(n) === 'b') };
   const used = { a: 0, b: 0 };
-  return topic.openers.map(([side, text, votes, rebuts], i) => ({
+  return topic.openers.map(([side, text, votes, rebuts, author], i) => ({
     id: `s${i + 1}`, side, text, votes,
-    by: fighters[side][used[side]++ % fighters[side].length],
+    by: author ?? fighters[side][used[side]++ % fighters[side].length],
     parent: rebuts === null ? null : `s${rebuts + 1}`,
   }));
 }
@@ -154,24 +169,38 @@ export class Feud {
     return { choices: [...candidatesAfter(info.topic).map(choice), ...fromPlayers], mine: mine ?? null, suggested: Boolean(suggested) };
   }
 
-  /** A player's own feud for tomorrow's ballot: a question and two sides. One per fighter per day, and it gets their vote. */
-  async suggest(question: unknown, a: unknown, b: unknown): Promise<string> {
+  /**
+   * A player's own feud for tomorrow's ballot: a question, two sides, and optionally one argument for each side
+   * to open the council with. One per fighter per day, and it gets their vote.
+   */
+  async suggest(question: unknown, a: unknown, b: unknown, argA: unknown = null, argB: unknown = null): Promise<string> {
     const user = this.fighter();
     let q = plain(question, SUGGEST.questionMax);
     const sides = { a: plain(a, SUGGEST.sideMax), b: plain(b, SUGGEST.sideMax) };
     if (q.length < SUGGEST.questionMin) throw new FeudError('Ask a real question');
     if (!sides.a || !sides.b) throw new FeudError('Name both sides');
     if (sides.a.toLowerCase() === sides.b.toLowerCase()) throw new FeudError('The two sides need different names');
-    if ([q, sides.a, sides.b].some((t) => LINKY.test(t))) throw new FeudError('No links or usernames in a feud');
+    const openers = { a: plain(argA, TEXT_MAX), b: plain(argB, TEXT_MAX) };
+    if ([q, sides.a, sides.b, openers.a, openers.b].some((t) => LINKY.test(t))) throw new FeudError('No links or usernames in a feud');
     if (!q.endsWith('?')) q = `${q.replace(/[.!]+$/, '')}?`;
     const id = `c${await this.store.incrBy(TOPIC_SEQ_KEY, 1)}`;
     if (!(await this.store.hSetNX(this.k.proposedBy, user, id))) throw new FeudError('You already suggested a feud today', 429);
-    const topic: Topic = { id, question: q, sides, openers: [], by: user };
+    const topic: Topic = {
+      id, question: q, sides, by: user,
+      openers: (['a', 'b'] as const).filter((sd) => openers[sd]).map((sd) => [sd, openers[sd], OPENER_VOTES, null, user] as Topic['openers'][number]),
+    };
     const row = JSON.stringify(topic);
     await this.store.hSet(TOPICS_KEY, { [id]: row });
     await this.store.hSet(this.k.proposals, { [id]: row });
     await this.voteNext(id);
     return id;
+  }
+
+  /** A moderator strikes a player's suggestion off the ballot. Its votes go with it. */
+  async removeSuggestion(topicId: unknown): Promise<void> {
+    if (typeof topicId !== 'string' || !(await this.store.hGet(this.k.proposals, topicId))) throw new FeudError('That suggestion is already gone', 404);
+    await this.store.hDel(this.k.proposals, [topicId]);
+    await this.store.hDel(this.k.next, [topicId]);
   }
 
   /** One vote per fighter for tomorrow's feud; voting again moves it. */
@@ -181,7 +210,7 @@ export class Feud {
     if (!choices.some((c) => c.id === topicId)) throw new FeudError('That feud isn\u2019t on tomorrow\u2019s ballot');
     const before = await this.store.hGet(this.k.nextMine, user);
     if (before === topicId) return;
-    if (before) await this.store.hIncrBy(this.k.next, before, -1);
+    if (before && (await this.store.hGet(this.k.next, before)) !== undefined) await this.store.hIncrBy(this.k.next, before, -1);
     await this.store.hIncrBy(this.k.next, topicId as string, 1);
     await this.store.hSet(this.k.nextMine, { [user]: topicId as string });
   }

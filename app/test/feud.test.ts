@@ -244,3 +244,39 @@ test('streaks count consecutive days, reset after a gap, and wins go to the winn
   assert.equal(flairText({ streak: 4, best: 4, wins: 0, lastDay: 9 }), 'Feudlands: 4 days at war');
   assert.equal((await new Feud(store, 'd5', 'ann', T0).state(0)).me.record?.wins, 1);
 });
+
+import { ballotNotice } from '../src/server/feud.ts';
+
+test('a suggestion can open the council with the author\'s own arguments', async () => {
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  const id = await ann.suggest('Socks with sandals?', 'Comfort', 'Dignity', 'Warm toes, cool breeze.', '');
+  await Feud.open(store, 'p2', id, 13);
+  const st = await new Feud(store, 'p2', 'bob', T0).state(0);
+  assert.deepEqual(st.args.map((a) => [a.side, a.by, a.text]), [['a', 'ann', 'Warm toes, cool breeze.']]);
+  assert.ok(st.args[0].votes >= 1); // starts with the author's vote; the crowd may add more
+  await assert.rejects(new Feud(store, 'p', 'bob', T0).suggest('Sandals or boots?', 'S', 'B', 'see www.x.com', ''), /No links/);
+});
+
+test('moderators strike a suggestion off the ballot, and its votes go with it', async () => {
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  const id = await ann.suggest('Socks with sandals?', 'Comfort', 'Dignity');
+  await new Feud(store, 'p', 'bob', T0).voteNext(id);
+  assert.equal(await ann.winner(), id);
+  await new Feud(store, 'p', 'mod', T0).removeSuggestion(id);
+  const next = await ann.next();
+  assert.ok(!next.choices.some((c) => c.id === id));
+  assert.notEqual(await ann.winner(), id);
+  await assert.rejects(new Feud(store, 'p', 'mod', T0).removeSuggestion(id), /already gone/);
+  // bob votes again elsewhere without dragging a removed count below zero
+  await new Feud(store, 'p', 'bob', T0).voteNext(next.choices[0].id);
+  assert.ok((await ann.next()).choices.every((c) => c.votes >= 0));
+});
+
+test('the moderators\' notice quotes the feud, its author and how to stop it', () => {
+  const { subject, body } = ballotNotice({ id: 'c1', question: 'Socks with sandals?', sides: { a: 'Comfort', b: 'Dignity' }, by: 'ann', openers: [['a', 'Warm toes.', 1, null, 'ann']] }, 3, 'https://reddit.com/r/x/comments/abc');
+  assert.match(subject, /needs a look/);
+  assert.match(body, /3 votes\. It was suggested by u\/ann/);
+  assert.match(body, /> \*\*Socks with sandals\?\*\* Comfort or Dignity/);
+  assert.match(body, /> For the comfort: Warm toes\./);
+  assert.match(body, /remove it from the ballot/);
+});

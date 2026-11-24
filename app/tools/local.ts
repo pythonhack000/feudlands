@@ -17,6 +17,7 @@ app.route('/api', api({
   postId: () => 'local',
   username: async (c) => getCookie(c, 'as') ?? 'local_player',
   commentAsUser: async (postId, text) => { console.log(`[comment on ${postId}] ${text}`); },
+  isModerator: async (username) => username.startsWith('mod_'),
   setFlair: async (username, record) => { console.log(`[flair u/${username}] ${flairText(record)}`); },
 }));
 app.use('/*', serveStatic({ root: './dist/client' }));
