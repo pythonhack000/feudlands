@@ -4,6 +4,10 @@ export type Side = 'a' | 'b';
 export const SIDES: readonly Side[] = ['a', 'b'];
 export const isSide = (value: unknown): value is Side => value === 'a' || value === 'b';
 
+/** Today's feud number, shown in the game and the results. */
+export const FEUD_DAY = 12;
+export const SIDE_NAMES: Record<Side, string> = { a: 'cats', b: 'dogs' };
+
 /** Every this many upvotes make a battle cry 1 stronger. */
 export const CRY_VOTES = 20;
 export const TEXT_MAX = 120;

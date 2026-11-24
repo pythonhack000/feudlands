@@ -19,6 +19,7 @@ export function memoryStore(): Store {
     async hSet(key, values) { Object.entries(values).forEach(([f, v]) => hash(key).set(f, v)); return Object.keys(values).length; },
     async hSetNX(key, field, value) { if (hash(key).has(field)) return 0; hash(key).set(field, value); return 1; },
     async hGetAll(key) { return Object.fromEntries(hash(key)); },
+    async hDel(key, fields) { let n = 0; fields.forEach((f) => { if (hash(key).delete(f)) n++; }); return n; },
     async hIncrBy(key, field, value) { const n = Number(hash(key).get(field) ?? 0) + value; hash(key).set(field, String(n)); return n; },
   };
 }

@@ -1,66 +1,32 @@
-// ---------- seeded randomness ----------
-function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-const hash = (q, r, s = 0) => { let h = (q * 374761393 + r * 668265263 + s * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+import * as I from '../shared/island.ts';
+import { CRY_VOTES, FEUD_DAY } from '../shared/rules.ts';
+
+const { rng, hash, DIRS, NAMES, sideOf, isFree, STRENGTH, HOME } = I;
 
 const C = { ink: '#3a2a1c', inkSoft: '#7a6347', sea: '#6f9a95', land: '#e6d3a3', paper: '#efe3c8' };
 const SIDES = { a: { name: 'Cats', ink: '#2f5d8a' }, b: { name: 'Dogs', ink: '#b5452f' } };
-const TODAY = 12, INK_MS = 700, LABEL_MS = 2600, BATTLE_MS = 3400;
+const TODAY = FEUD_DAY, INK_MS = 700, LABEL_MS = 2600, BATTLE_MS = 3400;
 const battles = [];
 
-// ---------- today's island (a new shape every day) ----------
-const DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+// ---------- today's island and its rules (shared with the server) ----------
 const EDGE = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]];
-const key = (q, r) => q + ',' + r;
-const RADIUS = 7;
-const cells = new Map();
-for (let q = -RADIUS - 2; q <= RADIUS + 2; q++) for (let r = -RADIUS - 2; r <= RADIUS + 2; r++) {
-  const d = (Math.abs(q) + Math.abs(r) + Math.abs(-q - r)) / 2;
-  if (d > RADIUS + 1) continue;
-  const coast = RADIUS - 1.2 + (hash(q, r, TODAY) - 0.5) * 2.4 + Math.sin(q * 0.9 + r * 0.4 + TODAY) * 0.8;
-  cells.set(key(q, r), { q, r, land: d <= coast, side: null, kind: null, by: null });
-}
-const cell = (q, r) => cells.get(key(q, r));
-const landNeighbours = (c) => DIRS.map(([dq, dr]) => cell(c.q + dq, c.r + dr)).filter((n) => n && n.land);
-const isFree = (c) => c && c.land && !c.side;
-
-// ---------- the rules ----------
-// Camp: claims a hex. Tower: claims a hex and can never be captured.
-// Capture: an enemy camp whose every land neighbour is yours turns to your side.
+const cells = I.makeIsland(TODAY);
+const cell = (q, r) => I.cellAt(cells, q, r);
+const landNeighbours = (c) => I.landNeighbours(cells, c);
 const KINDS = {
   camp: { name: 'Camp', rule: 'Claims one hex' },
   tower: { name: 'Tower', rule: 'Claims a hex. Can\u2019t be boxed in' },
   charge: { name: 'Charge', rule: 'Attack an enemy hex beside your land' },
 };
-function captures(side) {
-  const flipped = [];
-  for (const c of cells.values()) {
-    if (!c.land || !c.side || c.side === side || c.kind === 'tower') continue;
-    const near = landNeighbours(c);
-    if (near.length && near.every((n) => n.side === side)) flipped.push(c);
-  }
-  return flipped;
-}
-// How many enemy hexes would fall if this side built here (for the preview).
-function wouldCapture(c, side) {
-  const was = c.side; c.side = side; c.kind = 'camp';
-  const n = captures(side).length;
-  c.side = was; c.kind = null;
-  return n;
-}
-
-// Charge: attack an enemy hex that touches your land.
-// Attack = you + your pieces around the target + your battle cry (an argument: +1 per 20 upvotes).
-// Defence = the piece (camp 1, tower 3) + its own side's pieces around it + 1 for holding the ground.
-const STRENGTH = { camp: 1, tower: 3 };
-const ownNear = (c, side) => landNeighbours(c).filter((n) => n.side === side).length;
-const CRY_VOTES = 20, HOME = 1;
+const wouldCapture = (c, side) => I.wouldCapture(cells, c, side);
+const ownNear = (c, side) => I.ownNear(cells, c, side);
+const canCharge = (c, side) => I.canCharge(cells, c, side);
 // A cry's strength is its score, minus the score of the best rebuttal the other side has posted under it.
 const rawPower = (x) => Math.max(0, Math.floor(x.votes / CRY_VOTES));
 const rebuttalOf = (cry) => (cry && cry.replies && cry.replies.length ? [...cry.replies].sort((x, y) => y.votes - x.votes)[0] : null);
 const cryPower = (cry) => (!cry ? 0 : typeof cry.power === 'number' ? cry.power : Math.max(0, rawPower(cry) - (rebuttalOf(cry) ? rawPower(rebuttalOf(cry)) : 0)));
-const canCharge = (c, side) => Boolean(c && c.land && c.side && c.side !== side && ownNear(c, side) > 0);
-const attackOf = (c, side, cry) => 1 + ownNear(c, side) + cryPower(cry);
-const defenceOf = (c) => STRENGTH[c.kind] + ownNear(c, c.side) + HOME;
+const attackOf = (c, side, cry) => I.attackOf(cells, c, side, cryPower(cry));
+const defenceOf = (c) => I.defenceOf(cells, c);
 
 // ---------- ranks: earned by hexes taken, across all days ----------
 const RANKS = [[0, 'Recruit', 'Rct.'], [3, 'Private', 'Pvt.'], [8, 'Corporal', 'Cpl.'], [15, 'Sergeant', 'Sgt.'], [25, 'Captain', 'Capt.'], [40, 'General', 'Gen.']];
@@ -69,23 +35,6 @@ const statOf = (name) => (stats[name] ||= { total: 0, today: 0 });
 const rankOf = (name) => [...RANKS].reverse().find(([min]) => statOf(name).total >= min);
 const titled = (name) => (name === 'you' ? 'you' : `${rankOf(name)[2]} u/${name}`);
 function credit(name, n) { const st = statOf(name); st.total += n; st.today += n; }
-
-// ---------- the morning so far: both sides already fighting ----------
-const NAMES = ['quietfox', 'tea_and_maps', 'mod_kettle', 'lofi_owl', 'pixelpuddle', 'oldsalt', 'fernweh', 'brick_by_brick', 'nightjar', 'cartographer_k', 'sundial', 'gravelpit'];
-const sideOf = (name) => (NAMES.indexOf(name) % 2 === 0 ? 'a' : 'b');
-(function morning() {
-  const rand = rng(TODAY);
-  const land = [...cells.values()].filter((c) => c.land);
-  // Each side starts from its own shore and pushes inland.
-  const anchors = { a: { q: -4, r: 2 }, b: { q: 4, r: -2 } };
-  for (let i = 0; i < 66; i++) {
-    const side = i % 2 ? 'a' : 'b', home = anchors[side];
-    const pool = land.filter(isFree).sort((x, y) => Math.hypot(x.q - home.q, x.r - home.r) - Math.hypot(y.q - home.q, y.r - home.r) + (rand() - 0.5) * 6);
-    const c = pool[0]; if (!c) break;
-    const by = NAMES.filter((n) => sideOf(n) === side)[Math.floor(rand() * 5)] || NAMES[0];
-    Object.assign(c, { side, kind: rand() < 0.15 ? 'tower' : 'camp', by });
-  }
-})();
 
 // ---------- ink and watercolour ----------
 const canvas = document.getElementById('map');
@@ -326,20 +275,20 @@ function hexAt(px, py) {
 function wrap(text, width) { const out = []; let line = ''; for (const w of text.split(' ')) { if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w; } else line += ' ' + w; } if (line.trim()) out.push(line.trim()); return out; }
 const bestCry = (side) => [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[0] || null;
 function assault(c, side, by, cry) {
-  const now = replaying ? -Infinity : performance.now(), atk = attackOf(c, side, cry), def = defenceOf(c), won = atk > def, enemy = c.side;
+  const now = replaying ? -Infinity : performance.now();
   for (let i = battles.length - 1; i >= 0; i--) if (performance.now() - battles[i].at > BATTLE_MS) battles.splice(i, 1);
-  if (!replaying) battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won, seed: Math.floor(now) });
-  if (won) {
-    Object.assign(c, { side, kind: 'camp', by, flipAt: now + 900, label: null });
-    const boxed = captures(side);
-    boxed.forEach((f) => Object.assign(f, { side, flipAt: now + 1200, label: 'captured', by }));
-    credit(by, 1 + boxed.length);
-    if (cry && cry.id) takenBy[cry.id] = (takenBy[cry.id] || 0) + 1 + boxed.length;
+  const o = I.charge(cells, c, side, by, cryPower(cry), cry && cry.id ? cry.id : null);
+  if (!replaying) battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won: o.won, seed: Math.floor(now) });
+  if (o.won) {
+    Object.assign(c, { flipAt: now + 900, label: null });
+    o.flipped.forEach((f) => Object.assign(f, { flipAt: now + 1200, label: 'captured' }));
+    credit(by, 1 + o.flipped.length);
+    if (o.cryId) takenBy[o.cryId] = (takenBy[o.cryId] || 0) + 1 + o.flipped.length;
   }
   const who = by === 'you' ? 'You' : titled(by);
-  log(`<span>${who} charged the ${SIDES[enemy].name.toLowerCase()}, ${atk} against ${def}: ${won ? 'taken' : 'held off'}</span><em>${won ? '+3' : '+0'}</em>`, side);
+  log(`<span>${who} charged the ${SIDES[o.enemy].name.toLowerCase()}, ${o.atk} against ${o.def}: ${o.won ? 'taken' : 'held off'}</span><em>${o.won ? '+3' : '+0'}</em>`, side);
   setTimeout(() => { tally(); showRank(); }, 900); animate();
-  return won ? 3 : 0;
+  return o.won ? 3 : 0;
 }
 
 // ---------- animation loop while anything is fresh ----------
@@ -370,9 +319,9 @@ function log(html, side) {
 }
 function move(c, kind, side, by) {
   const now = replaying ? -Infinity : performance.now();
-  Object.assign(c, { side, kind, by, bornAt: now, label: titled(by) });
-  const flipped = captures(side);
-  flipped.forEach((f) => Object.assign(f, { side, flipAt: now + 350, label: 'captured', by }));
+  const o = I.build(cells, c, kind, side, by), flipped = o.flipped;
+  Object.assign(c, { bornAt: now, label: titled(by) });
+  flipped.forEach((f) => Object.assign(f, { flipAt: now + 350, label: 'captured' }));
   credit(by, flipped.length);
   const who = by === 'you' ? 'You' : titled(by);
   log(flipped.length ? `<span>${who} took ${flipped.length} from the ${SIDES[side === 'a' ? 'b' : 'a'].name.toLowerCase()}</span><em>+${1 + flipped.length * 2}</em>` : `<span>${who} raised a ${KINDS[kind].name.toLowerCase()}</span><em>+1</em>`, side);
@@ -380,21 +329,11 @@ function move(c, kind, side, by) {
   return 1 + flipped.length * 2;
 }
 // The demo crowd: the server sends a seed, and every client works out the same move from it.
-// Crowd fighters look for the move that captures the most, else push the front line. They charge without a cry.
-const FREE_LAND_KEPT = 0.25; // the crowd stops building once only this share of land is free, so players always have room
 function crowdMove(seed) {
-  const roll = rng(seed);
-  const by = NAMES[Math.floor(roll() * NAMES.length)], side = sideOf(by);
-  const land = [...cells.values()].filter((c) => c.land);
-  const crowded = land.filter(isFree).length <= land.length * FREE_LAND_KEPT;
-  if (crowded || roll() < 0.45) {
-    const targets = land.filter((c) => canCharge(c, side)).map((c) => ({ c, v: attackOf(c, side, null) - defenceOf(c) + roll() })).sort((x, y) => y.v - x.v);
-    if (targets[0]) { assault(targets[0].c, side, by, null); return; }
-  }
-  const scored = (crowded ? [] : land.filter(isFree)).map((c) => ({ c, v: wouldCapture(c, side) * 5 + landNeighbours(c).filter((n) => n.side).length + roll() * 2 }));
-  scored.sort((x, y) => y.v - x.v);
-  const pick = scored[Math.floor(roll() * Math.min(3, scored.length))];
-  if (pick) move(pick.c, roll() < 0.15 ? 'tower' : 'camp', side, by);
+  const choice = I.crowdChoice(cells, seed);
+  if (!choice) return;
+  if (choice.t === 'charge') assault(choice.c, choice.side, choice.by, null);
+  else move(choice.c, choice.kind, choice.side, choice.by);
 }
 
 // ---------- the shared war: the server keeps the log, every client replays it ----------
@@ -843,10 +782,16 @@ function openRules() {
 // ---------- midnight: the day's result, pinned under the post ----------
 // What the day meant for you. A day you skipped still says how close it was, so tomorrow has a reason.
 const hexes = (n) => `${n} ${n === 1 ? 'hex' : 'hexes'}`;
-// In the real post Share drops this line as a comment under the day's post; here it goes to the clipboard.
-async function shareLine(text, statusEl) {
-  try { await navigator.clipboard.writeText(text); statusEl.textContent = `Copied: \u201c${text}\u201d`; }
-  catch { statusEl.textContent = `Copy this: \u201c${text}\u201d`; }
+// Share posts your line as your own comment under the feud. The server writes the line from the log.
+async function shareLine(statusEl, button) {
+  button.disabled = true;
+  try {
+    const { text } = await api('share', {});
+    statusEl.textContent = `Posted under the feud: \u201c${text}\u201d`;
+  } catch (error) {
+    statusEl.textContent = error.message;
+    button.disabled = false;
+  }
 }
 function yourDay(a, b, win) {
   const margin = Math.abs(a - b);
@@ -877,10 +822,10 @@ function openMidnight() {
     <h2 style="color:${a === b ? C.ink : SIDES[win].ink}">${a === b ? 'The island is split, 50% to 50%' : `The ${SIDES[win].name.toLowerCase()} hold the island, ${pa}% to ${100 - pa}%`}</h2>
     <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken</small></div></div>
     <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
-    <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share</button><span role="status"></span></p>` : ''}</div></div>
+    <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share as a comment</button><span role="status"></span></p>` : ''}</div></div>
     <p>Tomorrow's feud: <em>Pineapple on pizza?</em></p>`);
   const brag = el.querySelector('.brag');
-  if (brag) brag.querySelector('button').onclick = () => shareLine(day.share, brag.querySelector('span'));
+  if (brag) brag.querySelector('button').onclick = () => shareLine(brag.querySelector('span'), brag.querySelector('button'));
   return el;
 }
 new ResizeObserver(() => { layout(); draw(); }).observe(canvas);
@@ -903,4 +848,4 @@ async function start() {
 }
 document.fonts.ready.then(start);
 // Test hook: ?debug exposes the board so scripted playthroughs can find hexes.
-if (new URLSearchParams(location.search).has('debug')) window.feud = { cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; }, get seq() { return lastSeq; }, get points() { return myPoints; } };
+if (new URLSearchParams(location.search).has('debug')) window.feud = { I, cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; }, get seq() { return lastSeq; }, get points() { return myPoints; } };

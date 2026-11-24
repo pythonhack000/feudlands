@@ -8,18 +8,20 @@ export interface ApiDeps {
   postId(): string | undefined;
   /** Who is asking. Devvit knows from its own context; the local war reads a cookie. */
   username(c: Context): Promise<string | null>;
+  /** Posts a comment under the feud as the player who asked. */
+  commentAsUser(postId: string, text: string): Promise<void>;
 }
 
 export function api(deps: ApiDeps): Hono {
   const app = new Hono();
 
-  const handle = <T>(work: (feud: Feud, body: Record<string, unknown>, c: Context) => Promise<T>) => async (c: Context) => {
+  const handle = <T>(work: (feud: Feud, body: Record<string, unknown>, c: Context, post: string) => Promise<T>) => async (c: Context) => {
     try {
       const post = deps.postId();
       if (!post) throw new FeudError('Open the feud from its post', 404);
       const body = c.req.method === 'POST' ? await readBody(c) : {};
       const feud = new Feud(deps.store, post, await deps.username(c));
-      return c.json<Envelope<T>>({ ok: true, data: await work(feud, body, c) });
+      return c.json<Envelope<T>>({ ok: true, data: await work(feud, body, c, post) });
     } catch (error) {
       if (error instanceof FeudError) return c.json<Envelope<T>>({ ok: false, error: error.message }, error.status);
       console.error('Feud request failed', error);
@@ -34,6 +36,18 @@ export function api(deps: ApiDeps): Hono {
   app.post('/charge', handle(async (feud, body, c) => { await feud.charge(body.q, body.r, body.cry ?? null); return feud.state(after(c)); }));
   app.post('/argue', handle(async (feud, body, c) => ({ id: await feud.argue(body.text, body.parent ?? null), state: await feud.state(after(c)) })));
   app.post('/vote', handle(async (feud, body, c) => { await feud.vote(body.id, body.dir); return feud.state(after(c)); }));
+  // Share: the brag goes up as the player's own comment under the feud.
+  app.post('/share', handle(async (feud, _body, _c, post) => {
+    const text = await feud.shareLine();
+    try {
+      await deps.commentAsUser(post, text);
+    } catch (error) {
+      await feud.unshare();
+      console.error('Share comment failed', error);
+      throw new FeudError('Reddit didn\u2019t take the comment. Try again in a moment.');
+    }
+    return { text };
+  }));
 
   return app;
 }

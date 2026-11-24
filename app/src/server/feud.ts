@@ -1,7 +1,8 @@
 // The shared war: one island per post, stored as an ordered log of moves.
 // Every client replays the same log onto the same seeded island, so everyone sees the same map.
+import { isCrowd, tallyDay } from '../shared/island.ts';
 import {
-  cryPower, isSide, MAP_REACH, TEXT_MAX,
+  cryPower, FEUD_DAY, isSide, MAP_REACH, SIDE_NAMES, TEXT_MAX,
   type Argument, type Move, type NewMove, type Side, type State,
 } from '../shared/rules.ts';
 
@@ -17,6 +18,32 @@ export interface Store {
   hSetNX(key: string, field: string, value: string): Promise<number>;
   hGetAll(key: string): Promise<Record<string, string>>;
   hIncrBy(key: string, field: string, value: number): Promise<number>;
+  hDel(key: string, fields: string[]): Promise<number>;
+}
+
+export interface Results {
+  a: number; b: number;
+  sworn: Record<Side, number>;
+  general: { name: string; hexes: number } | null;
+  cry: { text: string; by: string; side: Side; hexes: number } | null;
+  hexes: Record<string, number>;
+}
+
+const hexes = (n: number) => `${n} ${n === 1 ? 'hex' : 'hexes'}`;
+const pct = (n: number, total: number) => Math.round((n / Math.max(1, total)) * 100);
+
+/** The pinned comment that closes the day. Plain Markdown for Reddit. */
+export function resultsComment(r: Results): string {
+  const total = r.a + r.b, win: Side = r.a >= r.b ? 'a' : 'b';
+  const head = r.a === r.b
+    ? `**Midnight, day ${FEUD_DAY}: the island is split, 50% to 50%** (${hexes(r.a)} each).`
+    : `**Midnight, day ${FEUD_DAY}: the ${SIDE_NAMES[win]} hold the island, ${pct(r[win], total)}% to ${100 - pct(r[win], total)}%** (${r[win]} hexes to ${r[win === 'a' ? 'b' : 'a']}).`;
+  const lines = [
+    r.general ? `- General of the day: u/${r.general.name}, ${hexes(r.general.hexes)} taken` : null,
+    r.cry ? `- Cry of the day: \u201c${r.cry.text}\u201d by u/${r.cry.by}${r.cry.hexes ? `, took ${hexes(r.cry.hexes)}` : ''}` : null,
+    `- Sworn in: ${r.sworn.a} for the cats, ${r.sworn.b} for the dogs`,
+  ].filter(Boolean);
+  return [head, '', ...lines].join('\n');
 }
 
 export class FeudError extends Error {
@@ -51,7 +78,7 @@ const keys = (post: string) => {
   const k = (name: string) => `feud:${post}:${name}`;
   return {
     meta: k('meta'), seq: k('seq'), moves: k('moves'), sides: k('sides'), seen: k('seen'),
-    args: k('args'), votes: k('votes'), botSlots: k('botslots'), botCount: k('botcount'),
+    args: k('args'), votes: k('votes'), shared: k('shared'), botSlots: k('botslots'), botCount: k('botcount'),
     used: (user: string) => k(`used:${user}`), myVotes: (user: string) => k(`uv:${user}`),
   };
 };
@@ -151,6 +178,45 @@ export class Feud {
     if (before === dir) return;
     await this.store.hIncrBy(this.k.votes, id, dir - before);
     await this.store.hSet(this.k.myVotes(user), { [id]: String(dir) });
+  }
+
+  /** The day so far, counted from the whole log: what the midnight comment says. */
+  async results(): Promise<Results> {
+    const [moves, args, sides] = await Promise.all([
+      this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' }),
+      this.args(),
+      this.store.hGetAll(this.k.sides),
+    ]);
+    const day = tallyDay(FEUD_DAY, moves.map((m) => JSON.parse(m.member) as Move));
+    const players = Object.entries(day.hexes).filter(([name, n]) => !isCrowd(name) && n > 0).sort((x, y) => y[1] - x[1]);
+    const said = args.filter((a) => a.parent === null && !isCrowd(a.by));
+    const best = said.map((a) => ({ a, hexes: day.cries[a.id] ?? 0 })).sort((x, y) => y.hexes - x.hexes || y.a.votes - x.a.votes)[0];
+    const sworn = { a: 0, b: 0 };
+    Object.values(sides).forEach((s) => { if (isSide(s)) sworn[s]++; });
+    return {
+      a: day.a, b: day.b, sworn,
+      general: players[0] ? { name: players[0][0], hexes: players[0][1] } : null,
+      cry: best ? { text: best.a.text, by: best.a.by, side: best.a.side, hexes: best.hexes } : null,
+      hexes: day.hexes,
+    };
+  }
+
+  /** One brag per fighter per day, worked out from the log so nobody can claim hexes they didn't take. */
+  async shareLine(): Promise<string> {
+    const user = this.fighter(), side = await this.sideOf(user);
+    const r = await this.results(), mine = r.hexes[user] ?? 0;
+    if (!mine) throw new FeudError('Take a hex first, then brag');
+    const lead = side === 'a' ? r.a - r.b : r.b - r.a, sign = `Feudlands, day ${FEUD_DAY}`;
+    const text = lead > 0 && mine >= lead
+      ? `I was the margin: the ${SIDE_NAMES[side]} lead by ${hexes(lead)} and I took ${mine}. ${sign}`
+      : `I took ${hexes(mine)} for the ${SIDE_NAMES[side]}. ${sign}`;
+    if (!(await this.store.hSetNX(this.k.shared, user, text))) throw new FeudError('You already shared today', 429);
+    return text;
+  }
+
+  /** Lets a share try again if posting the comment failed. */
+  async unshare(): Promise<void> {
+    if (this.user) await this.store.hDel(this.k.shared, [this.user]);
   }
 
   private fighter(): string {

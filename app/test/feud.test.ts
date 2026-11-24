@@ -95,3 +95,52 @@ test('the crowd moves once per tick however many people watch, and stops for the
   assert.equal(st.moves.filter((m) => m.t === 'bot').length, BOT_MOVES_PER_DAY);
   assert.equal(st.quiet, true);
 });
+
+import { resultsComment } from '../src/server/feud.ts';
+import { isFree, makeIsland, tallyDay, wouldCapture } from '../src/shared/island.ts';
+import { FEUD_DAY } from '../src/shared/rules.ts';
+
+
+test('the crowd plays the same day the same way every time', async () => {
+  const store = memoryStore();
+  for (let i = 0; i < 30; i++) await new Feud(store, 'p', 'ann', T0 + i * BOT_TICK_MS).state(0);
+  const { moves } = await new Feud(store, 'p', 'ann', T0).state(0);
+  assert.deepEqual(tallyDay(FEUD_DAY, moves), tallyDay(FEUD_DAY, [...moves].reverse()));
+  const day = tallyDay(FEUD_DAY, moves);
+  assert.ok(day.a > 0 && day.b > 0);
+});
+
+test('results credit real players only, never the demo crowd', async () => {
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  await ann.chooseSide('a');
+  for (let i = 1; i < 20; i++) await new Feud(store, 'p', 'bob', T0 + i * BOT_TICK_MS).state(0);
+  const r = await ann.results();
+  assert.equal(r.general, null);
+  assert.equal(r.cry, null); // the seeded arguments belong to the crowd
+  assert.deepEqual(r.sworn, { a: 1, b: 0 });
+  const text = resultsComment(r);
+  assert.match(text, /^\*\*Midnight, day 12: /);
+  assert.doesNotMatch(text, /u\/(quietfox|tea_and_maps|oldsalt)/);
+});
+
+test('share refuses a fighter with nothing taken, and only brags once', async () => {
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  await ann.chooseSide('b');
+  await assert.rejects(ann.shareLine(), /Take a hex first/);
+  // The morning leaves a cats' camp the dogs can box in with one camp.
+  const island = makeIsland(FEUD_DAY);
+  const boxIn = [...island.values()].find((c) => isFree(c) && wouldCapture(island, c, 'b') > 0)!;
+  await ann.build('camp', boxIn.q, boxIn.r);
+  assert.ok((await ann.results()).hexes.ann > 0);
+  const line = await ann.shareLine();
+  assert.match(line, /Feudlands, day 12$/);
+  await assert.rejects(ann.shareLine(), /already shared/);
+  await ann.unshare();
+  assert.equal(await ann.shareLine(), line);
+});
+
+test('the results comment names the leader and the split', () => {
+  const text = resultsComment({ a: 30, b: 20, sworn: { a: 3, b: 2 }, general: { name: 'ann', hexes: 4 }, cry: { text: 'Meow', by: 'ann', side: 'a', hexes: 2 }, hexes: {} });
+  assert.equal(text, '**Midnight, day 12: the cats hold the island, 60% to 40%** (30 hexes to 20).\n\n- General of the day: u/ann, 4 hexes taken\n- Cry of the day: “Meow” by u/ann, took 2 hexes\n- Sworn in: 3 for the cats, 2 for the dogs');
+  assert.match(resultsComment({ a: 25, b: 25, sworn: { a: 1, b: 1 }, general: null, cry: null, hexes: {} }), /split, 50% to 50%/);
+});

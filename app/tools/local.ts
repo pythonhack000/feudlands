@@ -7,14 +7,19 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { api } from '../src/server/api.ts';
 import { memoryStore } from '../src/server/memoryStore.ts';
+import { Feud, resultsComment } from '../src/server/feud.ts';
 
 const PORT = Number(process.env.PORT ?? 5190);
+const store = memoryStore();
 const app = new Hono();
 app.route('/api', api({
-  store: memoryStore(),
+  store,
   postId: () => 'local',
   username: async (c) => getCookie(c, 'as') ?? 'local_player',
+  commentAsUser: async (postId, text) => { console.log(`[comment on ${postId}] ${text}`); },
 }));
 app.use('/*', serveStatic({ root: './dist/client' }));
+
+app.get('/local/results', async (c) => c.text(resultsComment(await new Feud(store, 'local', null).results())));
 
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`Feudlands local war on http://localhost:${PORT}/game.html`));
