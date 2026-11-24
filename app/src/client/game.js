@@ -259,6 +259,12 @@ function draw() {
     g.strokeStyle = SIDES[c.side].ink; g.lineWidth = 1; g.strokeRect(p.x - tw / 2 - 5, y - size * .6, tw + 10, size * .84);
     g.fillStyle = C.ink; g.fillText(c.label, p.x, y); g.restore();
   }
+  // Training: the hexes the current lesson points at, dotted in your ink.
+  for (const c of lessonHexes()) {
+    const cs = corners(c, size * 0.86);
+    g.save(); g.setLineDash([3, 3]); g.lineWidth = 1.6; g.strokeStyle = SIDES[mySide].ink;
+    g.beginPath(); cs.forEach((q, i) => (i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y))); g.closePath(); g.stroke(); g.restore();
+  }
   // Battles: crossed swords, ink spatter, the battle cry on a scroll, then the verdict.
   for (const b of battles) {
     const age = now - b.at; if (age > BATTLE_MS) continue;
@@ -402,8 +408,57 @@ function someoneMoves() {
   setTimeout(someoneMoves, 2200 + crowd() * 3000);
 }
 
-// ---------- your hand: three pieces a day ----------
-const hand = [{ kind: 'camp', used: false }, { kind: 'tower', used: false }, { kind: 'charge', used: false }, { kind: 'charge', used: false }];
+// ---------- training: a new player unlocks one action at a time ----------
+// Camps first, then surrounding, then charges, then the war council. After that the whole game is open.
+const LESSONS = [
+  { title: 'Camps', text: 'Place a camp on any empty hex. Next to your own land is safest.' },
+  { title: 'Surround', text: 'Surround an enemy camp on every side and it becomes yours. The dotted hexes would capture one right now.' },
+  { title: 'Charge', text: 'You can now build towers and charge. A charge attacks an enemy hex beside your land: beat its defence and it\u2019s yours. The dotted hexes are ones you\u2019d win.' },
+  { title: 'War council', text: 'Charges can now shout battle cries. Open the war council and upvote an argument you agree with: every upvote makes it hit harder.' },
+];
+const TRAINED = LESSONS.length, LESSON_KEY = 'feudlands.lesson';
+function readLesson() {
+  try { const n = Number(localStorage.getItem(LESSON_KEY)); return Number.isInteger(n) && n >= 0 && n <= TRAINED ? n : 0; }
+  catch { return 0; } // storage blocked: training simply starts over
+}
+let lesson = readLesson();
+const trained = () => lesson >= TRAINED;
+function saveLesson() {
+  try { localStorage.setItem(LESSON_KEY, String(lesson)); }
+  catch (error) { console.warn('Training progress was not saved', error); }
+}
+function startingHand() {
+  const piece = (kind) => ({ kind, used: false });
+  if (lesson < 2) return [piece('camp'), piece('camp'), piece('camp')];
+  if (lesson < 3) return [piece('camp'), piece('tower'), piece('charge')];
+  return [piece('camp'), piece('tower'), piece('charge'), piece('charge')];
+}
+function advanceLesson(to) {
+  if (lesson >= to) return;
+  const from = lesson; lesson = Math.min(to, TRAINED); saveLesson();
+  if (from < 2 && lesson >= 2) hand.push({ kind: 'tower', used: false }, { kind: 'charge', used: false });
+  if (from < 3 && lesson >= 3) hand.push({ kind: 'charge', used: false });
+  if (trained()) { grantedRally = reinforcements(mySide); statusEl.textContent = 'Training done. Everything is open: banners, rebuttals, and the council\u2019s rallies.'; }
+  showHeaderLinks(); renderCards(); coach(); draw();
+}
+function coach() {
+  const el = document.getElementById('coach');
+  if (!mySide || trained()) { el.hidden = true; return; }
+  el.hidden = false;
+  el.querySelector('b').textContent = `Training ${lesson + 1} of ${TRAINED}: ${LESSONS[lesson].title}`;
+  el.querySelector('span').textContent = LESSONS[lesson].text;
+}
+// Hexes the current lesson points at, drawn dotted on the map.
+function lessonHexes() {
+  if (!mySide || trained()) return [];
+  const kind = pickedKind(), all = [...cells.values()];
+  if (lesson === 1 && kind !== 'charge') return all.filter((c) => isFree(c) && wouldCapture(c, mySide) > 0);
+  if (lesson === 2 && kind === 'charge') return all.filter((c) => canCharge(c, mySide) && attackOf(c, mySide, null) > defenceOf(c));
+  return [];
+}
+
+// ---------- your hand: today's pieces ----------
+const hand = startingHand();
 const cardsEl = document.getElementById('cards'), statusEl = document.getElementById('status');
 let myPoints = 0;
 const pickedKind = () => (picked === null ? null : hand[picked].kind);
@@ -443,19 +498,20 @@ function showRank() {
 document.querySelectorAll('#pick button').forEach((btn) => btn.addEventListener('click', () => {
   mySide = btn.dataset.side;
   document.getElementById('pick').remove();
-  const you = document.getElementById('you');
-  you.innerHTML = '<span id="rank"></span><button type="button" id="openRules">How to play</button><button type="button" id="openCouncil">War council</button><button type="button" id="openGallery">Banners</button><button type="button" id="openEasel">Draw one</button><button type="button" id="openMidnight">Midnight</button>';
-  document.getElementById('openMidnight').onclick = openMidnight;
-  document.getElementById('openRules').onclick = openRules;
-  openRules();
-  showRank();
-  document.getElementById('openGallery').onclick = openGallery;
-  document.getElementById('openEasel').onclick = openEasel;
-  document.getElementById('openCouncil').onclick = openCouncil;
+  showHeaderLinks();
   grantedRally = reinforcements(mySide);
   statusEl.textContent = 'Pick a piece.';
-  renderCards();
+  document.getElementById('skipTraining').onclick = () => advanceLesson(TRAINED);
+  coach(); renderCards(); draw();
 }));
+// The header only offers what you've unlocked.
+function showHeaderLinks() {
+  const links = [['openRules', 'How to play', openRules, true], ['openCouncil', 'War council', openCouncil, lesson >= 3], ['openGallery', 'Banners', openGallery, trained()], ['openEasel', 'Draw one', openEasel, trained()], ['openMidnight', 'Midnight', openMidnight, true]];
+  const you = document.getElementById('you');
+  you.innerHTML = '<span id="rank"></span>' + links.filter(([, , , open]) => open).map(([id, label]) => `<button type="button" id="${id}">${label}</button>`).join('');
+  links.forEach(([id, , open]) => { const b = document.getElementById(id); if (b) b.onclick = open; });
+  showRank();
+}
 
 // ---------- banner gallery: upvote the one that flies over your side ----------
 const main = document.querySelector('main');
@@ -508,7 +564,7 @@ const MAX_RALLY_CHARGES = 3; // council reinforcements per fighter per day
 const rallyCharges = () => hand.filter((s) => s.rally).length;
 function syncRally() {
   // Each rally earned by your side's arguments puts one more charge in your hand, up to MAX_RALLY_CHARGES a day.
-  if (!mySide) return;
+  if (!mySide || !trained()) return;
   const owed = Math.min(reinforcements(mySide) - grantedRally, MAX_RALLY_CHARGES - rallyCharges());
   for (let i = 0; i < owed; i++) hand.push({ kind: 'charge', used: false, rally: true });
   if (owed > 0) { grantedRally += owed; statusEl.textContent = `The council rallied the ${SIDES[mySide].name.toLowerCase()}: +${owed} charge in your hand.`; renderCards(); }
@@ -530,7 +586,7 @@ function openCouncil() {
       for (const dir of [1, -1]) {
         const v = document.createElement('button'); v.className = 'vote'; v.type = 'button'; v.setAttribute('aria-pressed', String(a.vote === dir));
         v.setAttribute('aria-label', dir > 0 ? 'Upvote' : 'Downvote'); v.textContent = dir > 0 ? '\u25B2' : '\u25BC';
-        v.onclick = () => { a.votes -= a.vote; a.vote = a.vote === dir ? 0 : dir; a.votes += a.vote; render(); syncRally(); };
+        v.onclick = () => { a.votes -= a.vote; a.vote = a.vote === dir ? 0 : dir; a.votes += a.vote; render(); advanceLesson(TRAINED); syncRally(); };
         box.append(v);
         if (dir > 0) box.insertAdjacentHTML('beforeend', `<span class="pct">${a.votes}</span>`);
       }
@@ -563,7 +619,7 @@ function openCouncil() {
   const input = el.querySelector('input');
   el.querySelector('.write .vote').onclick = () => {
     const text = input.value.trim(); if (!text) return;
-    args.push({ side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0, replies: [] }); input.value = ''; render(); syncRally();
+    args.push({ side: mySide, by: 'you', text, votes: 1, vote: 1, taken: 0, replies: [] }); input.value = ''; render(); advanceLesson(TRAINED); syncRally();
   };
   render();
 }
@@ -627,12 +683,17 @@ canvas.addEventListener('pointerdown', (e) => {
   if (!kind || !mySide) return;
   if (kind === 'charge') {
     if (!canCharge(c, mySide)) { statusEl.textContent = 'Charge an enemy hex that touches your land.'; return; }
+    if (lesson < 3) { plainCharge(c, picked); return; }
     openCry(c, picked); return;
   }
   if (!isFree(c)) { statusEl.textContent = 'That hex is held or under water.'; return; }
-  myPoints += move(c, kind, mySide, 'you');
+  const gained = move(c, kind, mySide, 'you'), captured = gained > 1;
+  myPoints += gained;
   hand[picked].used = true; picked = null; hover = null;
   afterMove();
+  if (captured) advanceLesson(2);
+  else if (lesson === 0) advanceLesson(1);
+  else if (lesson === 1 && !hand.some((s) => !s.used && s.kind === 'camp')) advanceLesson(2); // nobody to surround today: move on anyway
 });
 // Once the day has nothing left to do, offer its ending instead of a still map.
 function offerMidnight() {
@@ -644,6 +705,15 @@ function afterMove() {
   if (!left) offerMidnight();
   statusEl.textContent = left ? `${myPoints} points for the ${SIDES[mySide].name.toLowerCase()} so far. ${left} left.` : `${myPoints} points today. The island is decided at midnight.`;
   renderCards();
+}
+// While learning, a charge has no battle cry, and the result explains its numbers.
+function plainCharge(target, slotIndex) {
+  const atk = attackOf(target, mySide, null), def = defenceOf(target), near = ownNear(target, mySide);
+  myPoints += assault(target, mySide, 'you', null);
+  hand[slotIndex].used = true; picked = null; hover = null;
+  afterMove();
+  statusEl.textContent = `Your attack ${atk} (1, plus ${near} for your land around it) against their defence ${def}: ${atk > def ? 'taken' : 'held off'}.`;
+  advanceLesson(3);
 }
 // Before a charge you choose which of your side's arguments to shout.
 function openCry(target, slotIndex) {
@@ -734,3 +804,5 @@ function openMidnight() {
 }
 new ResizeObserver(() => { layout(); draw(); }).observe(canvas);
 document.fonts.ready.then(() => { tally(); renderCards(); layout(); draw(); setTimeout(someoneMoves, 1500); });
+// Test hook: ?debug exposes the board so scripted playthroughs can find hexes.
+if (new URLSearchParams(location.search).has('debug')) window.feud = { cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; } };
