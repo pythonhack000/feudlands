@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Commons</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --parchment: #efe3c8;
+    --parchment-deep: #e2d1ad;
+    --ink: #3a2a1c;
+    --ink-soft: #7a6347;
+    --vermilion: #b5452f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--parchment);
+    color: var(--ink);
+    font-family: 'IM Fell English', Georgia, serif;
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 480px; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 14px 18px 6px; }
+  .title-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  h1 { font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 34px; margin: 0; letter-spacing: 0.02em; }
+  .day { font-style: italic; color: var(--ink-soft); font-size: 17px; }
+  .charter { margin-top: 6px; display: flex; gap: 10px; align-items: center; }
+  .seal { width: 34px; height: 34px; flex: none; }
+  .charter p { margin: 0; font-size: 17px; line-height: 1.2; }
+  .charter em { color: var(--vermilion); font-style: normal; }
+  .progress { margin-top: 4px; height: 6px; border-bottom: 1px solid var(--ink-soft); position: relative; }
+  .count { display: block; margin-top: 3px; font-style: italic; color: var(--ink-soft); font-size: 14px; }
+  .progress span { position: absolute; left: 0; bottom: -1px; height: 5px; background: var(--vermilion); opacity: .75; border-radius: 2px; transition: width .6s; }
+  .map-wrap { position: relative; flex: 1; min-height: 0; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .tip { position: absolute; pointer-events: none; background: rgba(239,227,200,.95); border: 1px solid var(--ink-soft); padding: 4px 8px; font-size: 15px; white-space: nowrap; transform: translate(-50%, -120%); display: none; }
+  .tray { padding: 8px 12px 14px; }
+  .status { text-align: center; font-style: italic; color: var(--ink-soft); font-size: 16px; margin: 0 0 8px; min-height: 20px; }
+  .cards { display: flex; gap: 10px; }
+  .card { flex: 1; background: rgba(255,250,236,.55); border: 1px solid rgba(58,42,28,.35); padding: 6px 6px 8px; text-align: center; cursor: pointer; font: inherit; color: inherit; transition: transform .15s, border-color .15s; }
+  .card canvas { width: 64px; height: 64px; margin: 0 auto; }
+  .card b { display: block; font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 18px; }
+  .card small { display: block; font-size: 13px; line-height: 1.15; color: var(--ink-soft); }
+  .card[aria-pressed="true"] { border-color: var(--vermilion); transform: translateY(-4px); box-shadow: 0 6px 14px -10px var(--ink); }
+  .card:disabled { opacity: .45; cursor: default; }
+  .card:focus-visible { outline: 2px solid var(--vermilion); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="title-row">
+      <h1>The Commons</h1>
+      <span class="day">Day 12</span>
+    </div>
+    <div class="charter">
+      <svg class="seal" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="16" fill="#b5452f" opacity=".85" />
+        <circle cx="20" cy="20" r="11" fill="none" stroke="#efe3c8" stroke-width="1.2" opacity=".8" />
+        <path d="M14 22 q6 -10 12 0" fill="none" stroke="#efe3c8" stroke-width="1.6" />
+      </svg>
+      <div style="flex:1">
+        <p>Today's charter: <em>water for every cottage</em></p>
+        <div class="progress"><span id="bar"></span></div>
+        <small class="count" id="count"></small>
+      </div>
+    </div>
+  </header>
+  <div class="map-wrap">
+    <canvas id="map"></canvas>
+    <div class="tip" id="tip"></div>
+  </div>
+  <div class="tray">
+    <p class="status" id="status">Pick a tile, then a spot on the island.</p>
+    <div class="cards" id="cards"></div>
+  </div>
+</main>
+<script>
+// ---------- seeded randomness ----------
+function rng(seed) {
+  return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const hash = (q, r, s = 0) => { let h = (q * 374761393 + r * 668265263 + s * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+
+// ---------- palette ----------
+const C = { ink: '#3a2a1c', inkSoft: '#7a6347', sea: '#6f9a95', seaDeep: '#557f7b', land: '#e6d3a3', field: '#d6ad4f', grove: '#6f8f4e', roof: '#b5452f', water: '#5b86a6', paper: '#efe3c8' };
+
+// ---------- hex grid (pointy top, axial) ----------
+const DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+const key = (q, r) => q + ',' + r;
+const RADIUS = 7;
+const cells = new Map();
+for (let q = -RADIUS - 2; q <= RADIUS + 2; q++) for (let r = -RADIUS - 2; r <= RADIUS + 2; r++) {
+  const d = (Math.abs(q) + Math.abs(r) + Math.abs(-q - r)) / 2;
+  if (d > RADIUS + 1) continue;
+  const coast = RADIUS - 1.2 + (hash(q, r) - 0.5) * 2.4 + Math.sin(q * 0.9 + r * 0.4) * 0.8;
+  cells.set(key(q, r), { q, r, land: d <= coast, tile: null, by: null, day: null });
+}
+const cell = (q, r) => cells.get(key(q, r));
+const neighbours = (c) => DIRS.map(([dq, dr]) => cell(c.q + dq, c.r + dr)).filter(Boolean);
+const touchesSea = (c) => DIRS.some(([dq, dr]) => { const n = cell(c.q + dq, c.r + dr); return !n || !n.land; });
+
+// ---------- tiles and their scoring ----------
+const TILES = {
+  cottage: { name: 'Cottage', rule: '+1 per cottage beside it, +2 beside a well' },
+  field: { name: 'Field', rule: '+1 per field or cottage beside it' },
+  grove: { name: 'Grove', rule: '+1 per grove beside it' },
+  well: { name: 'Well', rule: '+1 per cottage beside it' },
+  mill: { name: 'Mill', rule: '+2 per field beside it' },
+  lighthouse: { name: 'Lighthouse', rule: 'Coast only. +1 per sea beside it' },
+};
+function canPlace(type, c) { return c && c.land && !c.tile && (type !== 'lighthouse' || touchesSea(c)); }
+function score(type, c) {
+  const near = neighbours(c);
+  const count = (t) => near.filter((n) => n.tile === t).length;
+  switch (type) {
+    case 'cottage': return count('cottage') + (count('well') ? 2 : 0);
+    case 'field': return count('field') + count('cottage');
+    case 'grove': return count('grove');
+    case 'well': return count('cottage');
+    case 'mill': return count('field') * 2;
+    case 'lighthouse': return DIRS.filter(([dq, dr]) => { const n = cell(c.q + dq, c.r + dr); return !n || !n.land; }).length;
+  }
+  return 0;
+}
+
+// ---------- eleven days of other players' building ----------
+const NAMES = ['quietfox', 'tea_and_maps', 'mod_kettle', 'lofi_owl', 'pixelpuddle', 'oldsalt', 'fernweh', 'brick_by_brick', 'nightjar', 'cartographer_k'];
+(function history() {
+  const rand = rng(12);
+  const land = [...cells.values()].filter((c) => c.land);
+  const centre = { q: 0, r: 0 };
+  const plan = [['cottage', 14], ['field', 16], ['grove', 18], ['well', 3], ['mill', 2], ['lighthouse', 1]];
+  for (const [type, n] of plan) {
+    for (let i = 0; i < n; i++) {
+      // Villages grow near what is already there; groves drift to the edge.
+      const pool = land.filter((c) => canPlace(type, c)).sort((a, b) => {
+        const da = Math.hypot(a.q - centre.q + (type === 'grove' ? 3 : 0), a.r - centre.r) + rand() * 4;
+        const db = Math.hypot(b.q - centre.q + (type === 'grove' ? 3 : 0), b.r - centre.r) + rand() * 4;
+        return type === 'lighthouse' ? db - da : da - db;
+      });
+      const c = pool[Math.floor(rand() * Math.min(4, pool.length))];
+      if (!c) continue;
+      c.tile = type; c.by = NAMES[Math.floor(rand() * NAMES.length)]; c.day = 1 + Math.floor(rand() * 11);
+    }
+  }
+})();
+
+// ---------- ink and watercolour ----------
+const canvas = document.getElementById('map');
+let g = canvas.getContext('2d');
+let size = 20, ox = 0, oy = 0, dpr = 1;
+const center = (c) => ({ x: ox + size * Math.sqrt(3) * (c.q + c.r / 2), y: oy + size * 1.5 * c.r });
+function corners(c, s = size) { const p = center(c); return [...Array(6)].map((_, i) => { const a = Math.PI / 180 * (60 * i - 30); return { x: p.x + s * Math.cos(a), y: p.y + s * Math.sin(a) }; }); }
+
+function inkLine(x1, y1, x2, y2, rand, w = 1.2, color = C.ink) {
+  const mx = (x1 + x2) / 2 + (rand() - 0.5) * 1.6, my = (y1 + y2) / 2 + (rand() - 0.5) * 1.6;
+  g.strokeStyle = color; g.lineWidth = w * (0.8 + rand() * 0.4); g.lineCap = 'round';
+  g.beginPath(); g.moveTo(x1 + (rand() - .5) * .6, y1 + (rand() - .5) * .6); g.quadraticCurveTo(mx, my, x2, y2); g.stroke();
+}
+function wash(points, color, rand, alpha = 0.22, layers = 4) {
+  g.save(); g.fillStyle = color;
+  for (let l = 0; l < layers; l++) {
+    g.globalAlpha = alpha * (0.6 + rand() * 0.6);
+    g.beginPath();
+    points.forEach((p, i) => { const x = p.x + (rand() - .5) * size * .18, y = p.y + (rand() - .5) * size * .18; i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.closePath(); g.fill();
+  }
+  g.restore();
+}
+function blob(x, y, r, color, rand, alpha = 0.3) {
+  const pts = [...Array(9)].map((_, i) => { const a = i / 9 * Math.PI * 2; const k = r * (0.75 + rand() * 0.4); return { x: x + Math.cos(a) * k, y: y + Math.sin(a) * k }; });
+  wash(pts, color, rand, alpha, 3);
+}
+
+// ---------- drawing tiles ----------
+function drawTile(type, p, s, rand, ghost = false) {
+  g.save(); if (ghost) g.globalAlpha = 0.55;
+  const u = s / 20;
+  if (type === 'field') {
+    const hex = [...Array(6)].map((_, i) => { const a = Math.PI / 180 * (60 * i - 30); return { x: p.x + s * .86 * Math.cos(a), y: p.y + s * .86 * Math.sin(a) }; });
+    wash(hex, C.field, rand, 0.3);
+    for (let i = -3; i <= 3; i++) inkLine(p.x - 11 * u, p.y + i * 4 * u - 2 * u, p.x + 11 * u, p.y + i * 4 * u + 2 * u, rand, 0.7 * u, C.inkSoft);
+  } else if (type === 'grove') {
+    for (const [dx, dy, r] of [[-6, -3, 6], [5, -5, 5], [0, 5, 6.5]]) {
+      blob(p.x + dx * u, p.y + dy * u, r * u, C.grove, rand, 0.45);
+      g.strokeStyle = C.ink; g.lineWidth = 0.9 * u; g.beginPath(); g.arc(p.x + dx * u, p.y + dy * u, r * .8 * u, Math.PI * 1.05, Math.PI * 1.95); g.stroke();
+      inkLine(p.x + dx * u, p.y + (dy + r * .6) * u, p.x + dx * u, p.y + (dy + r + 2) * u, rand, 1 * u);
+    }
+  } else if (type === 'cottage') {
+    const x = p.x, y = p.y + 2 * u;
+    wash([{ x: x - 8 * u, y: y - 3 * u }, { x: x, y: y - 11 * u }, { x: x + 8 * u, y: y - 3 * u }], C.roof, rand, 0.5, 3);
+    wash([{ x: x - 7 * u, y: y - 3 * u }, { x: x + 7 * u, y: y - 3 * u }, { x: x + 7 * u, y: y + 6 * u }, { x: x - 7 * u, y: y + 6 * u }], '#f3e7c9', rand, 0.6, 2);
+    inkLine(x - 9 * u, y - 3 * u, x, y - 12 * u, rand, 1.2 * u); inkLine(x, y - 12 * u, x + 9 * u, y - 3 * u, rand, 1.2 * u);
+    inkLine(x - 7 * u, y - 3 * u, x - 7 * u, y + 6 * u, rand, 1.1 * u); inkLine(x + 7 * u, y - 3 * u, x + 7 * u, y + 6 * u, rand, 1.1 * u);
+    inkLine(x - 8 * u, y + 6 * u, x + 8 * u, y + 6 * u, rand, 1.1 * u);
+    inkLine(x - 1.5 * u, y + 6 * u, x - 1.5 * u, y + 1.5 * u, rand, 0.9 * u); inkLine(x - 1.5 * u, y + 1.5 * u, x + 1.5 * u, y + 1.5 * u, rand, 0.9 * u); inkLine(x + 1.5 * u, y + 1.5 * u, x + 1.5 * u, y + 6 * u, rand, 0.9 * u);
+  } else if (type === 'well') {
+    blob(p.x, p.y + 1 * u, 6 * u, C.water, rand, 0.45);
+    g.strokeStyle = C.ink; g.lineWidth = 1.2 * u; g.beginPath(); g.ellipse(p.x, p.y + 2 * u, 7 * u, 3.5 * u, 0, 0, Math.PI * 2); g.stroke();
+    inkLine(p.x - 7 * u, p.y + 2 * u, p.x - 7 * u, p.y - 8 * u, rand, 1.1 * u); inkLine(p.x + 7 * u, p.y + 2 * u, p.x + 7 * u, p.y - 8 * u, rand, 1.1 * u);
+    inkLine(p.x - 9 * u, p.y - 8 * u, p.x + 9 * u, p.y - 8 * u, rand, 1.3 * u); inkLine(p.x, p.y - 8 * u, p.x, p.y - 2 * u, rand, 0.7 * u);
+  } else if (type === 'mill') {
+    wash([{ x: p.x - 5 * u, y: p.y + 8 * u }, { x: p.x - 3 * u, y: p.y - 3 * u }, { x: p.x + 3 * u, y: p.y - 3 * u }, { x: p.x + 5 * u, y: p.y + 8 * u }], '#f3e7c9', rand, 0.7, 2);
+    inkLine(p.x - 5 * u, p.y + 8 * u, p.x - 3 * u, p.y - 3 * u, rand, 1.1 * u); inkLine(p.x + 5 * u, p.y + 8 * u, p.x + 3 * u, p.y - 3 * u, rand, 1.1 * u); inkLine(p.x - 6 * u, p.y + 8 * u, p.x + 6 * u, p.y + 8 * u, rand, 1.1 * u);
+    for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 + 0.4; const ex = p.x + Math.cos(a) * 11 * u, ey = p.y - 4 * u + Math.sin(a) * 11 * u; inkLine(p.x, p.y - 4 * u, ex, ey, rand, 1 * u); inkLine(ex, ey, ex + Math.cos(a + 1.57) * 3 * u, ey + Math.sin(a + 1.57) * 3 * u, rand, 0.8 * u); }
+  } else if (type === 'lighthouse') {
+    wash([{ x: p.x - 4 * u, y: p.y + 8 * u }, { x: p.x - 2 * u, y: p.y - 6 * u }, { x: p.x + 2 * u, y: p.y - 6 * u }, { x: p.x + 4 * u, y: p.y + 8 * u }], '#f3e7c9', rand, 0.8, 2);
+    inkLine(p.x - 4 * u, p.y + 8 * u, p.x - 2 * u, p.y - 6 * u, rand, 1.1 * u); inkLine(p.x + 4 * u, p.y + 8 * u, p.x + 2 * u, p.y - 6 * u, rand, 1.1 * u);
+    inkLine(p.x - 3 * u, p.y + 2 * u, p.x + 3 * u, p.y + 2 * u, rand, 2 * u, C.roof); inkLine(p.x - 3.4 * u, p.y - 2 * u, p.x + 3.4 * u, p.y - 2 * u, rand, 2 * u, C.roof);
+    blob(p.x, p.y - 8 * u, 4 * u, '#f0c75e', rand, 0.6);
+    for (const a of [-0.25, 0.25, Math.PI - 0.25, Math.PI + 0.25]) inkLine(p.x + Math.cos(a) * 5 * u, p.y - 8 * u + Math.sin(a) * 5 * u, p.x + Math.cos(a) * 11 * u, p.y - 8 * u + Math.sin(a) * 11 * u, rand, 0.7 * u, C.inkSoft);
+  }
+  g.restore();
+}
+
+// ---------- the map ----------
+function layout() {
+  const box = canvas.getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = box.width * dpr; canvas.height = box.height * dpr;
+  // Fit the island itself, not the whole grid, so the land fills the view.
+  const land = [...cells.values()].filter((c) => c.land);
+  const xs = land.map((c) => Math.sqrt(3) * (c.q + c.r / 2)), ys = land.map((c) => 1.5 * c.r);
+  const minX = Math.min(...xs) - 1.2, maxX = Math.max(...xs) + 1.2, minY = Math.min(...ys) - 1.3, maxY = Math.max(...ys) + 1.3;
+  size = Math.min(box.width / (maxX - minX), box.height / (maxY - minY));
+  ox = box.width / 2 - size * (minX + maxX) / 2; oy = box.height / 2 - size * (minY + maxY) / 2;
+}
+let hover = null, picked = null, placed = null;
+function draw() {
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = canvas.width / dpr, h = canvas.height / dpr;
+  g.clearRect(0, 0, w, h);
+  const rand = rng(7);
+  // Sea: layered wash with wave strokes.
+  wash([{ x: -20, y: -20 }, { x: w + 20, y: -20 }, { x: w + 20, y: h + 20 }, { x: -20, y: h + 20 }], C.sea, rand, 0.12, 5);
+  for (let i = 0; i < 70; i++) { const x = rand() * w, y = rand() * h; inkLine(x, y, x + 8, y - 1.5, rand, 0.6, 'rgba(58,42,28,.35)'); inkLine(x + 8, y - 1.5, x + 15, y, rand, 0.6, 'rgba(58,42,28,.35)'); }
+  const land = [...cells.values()].filter((c) => c.land);
+  // Coast ripples: concentric ink lines just outside the shore.
+  for (const c of land) {
+    const cs = corners(c);
+    DIRS.forEach(([dq, dr], i) => {
+      const n = cell(c.q + dq, c.r + dr); if (n && n.land) return;
+      const edge = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]][i];
+      const a = cs[edge[0]], b = cs[edge[1]], p = center(c);
+      for (let k = 1; k <= 3; k++) { const f = 1 + k * 0.16; inkLine(p.x + (a.x - p.x) * f, p.y + (a.y - p.y) * f, p.x + (b.x - p.x) * f, p.y + (b.y - p.y) * f, rand, 0.55, `rgba(58,42,28,${0.4 - k * 0.1})`); }
+    });
+  }
+  // Land wash, then the shoreline in heavier ink.
+  for (const c of land) wash(corners(c, size * 1.04), C.land, rand, 0.32, 3);
+  for (const c of land) {
+    const cs = corners(c);
+    DIRS.forEach(([dq, dr], i) => {
+      const n = cell(c.q + dq, c.r + dr);
+      const edge = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]][i];
+      const a = cs[edge[0]], b = cs[edge[1]];
+      if (!n || !n.land) inkLine(a.x, a.y, b.x, b.y, rand, 1.4);
+      else if (hash(c.q, c.r, i) > 0.35) { g.setLineDash([1, 3]); inkLine(a.x, a.y, b.x, b.y, rand, 0.5, 'rgba(58,42,28,.3)'); g.setLineDash([]); }
+    });
+  }
+  // Tiles.
+  for (const c of land) if (c.tile) drawTile(c.tile, center(c), size, rng(c.q * 31 + c.r * 17 + 3));
+  // Your tile today, circled in red.
+  if (placed) { const p = center(placed); g.strokeStyle = C.roof; g.lineWidth = 1.6; g.beginPath(); g.ellipse(p.x, p.y, size * 1.05, size * .95, -0.2, 0.2, Math.PI * 2.1); g.stroke(); }
+  // Hover preview.
+  if (hover && picked && canPlace(picked, hover)) {
+    const p = center(hover);
+    wash(corners(hover, size * 0.95), C.roof, rand, 0.1, 2);
+    drawTile(picked, p, size, rng(1), true);
+    const pts = score(picked, hover);
+    g.font = `italic ${Math.round(size * 0.85)}px 'IM Fell English', serif`; g.fillStyle = C.roof; g.textAlign = 'center';
+    g.fillText(pts ? `+${pts}` : '+0', p.x + size * 0.9, p.y - size * 0.8);
+  } else if (hover && picked && hover.land) {
+    g.strokeStyle = 'rgba(58,42,28,.4)'; g.lineWidth = 1; inkLine(center(hover).x - 5, center(hover).y - 5, center(hover).x + 5, center(hover).y + 5, rand); inkLine(center(hover).x + 5, center(hover).y - 5, center(hover).x - 5, center(hover).y + 5, rand);
+  }
+  drawCompass(w - 44, h - 46, 26, rand);
+}
+function drawCompass(x, y, r, rand) {
+  g.save(); g.globalAlpha = 0.75;
+  g.strokeStyle = C.ink; g.lineWidth = 0.8; g.beginPath(); g.arc(x, y, r * .7, 0, Math.PI * 2); g.stroke();
+  for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 - Math.PI / 2; const tip = { x: x + Math.cos(a) * r, y: y + Math.sin(a) * r }; const l = { x: x + Math.cos(a - 1.4) * r * .18, y: y + Math.sin(a - 1.4) * r * .18 }; const rr = { x: x + Math.cos(a + 1.4) * r * .18, y: y + Math.sin(a + 1.4) * r * .18 };
+    g.fillStyle = i === 0 ? C.roof : C.ink; g.beginPath(); g.moveTo(tip.x, tip.y); g.lineTo(l.x, l.y); g.lineTo(rr.x, rr.y); g.closePath(); g.fill(); }
+  g.font = `14px 'IM Fell English SC', serif`; g.fillStyle = C.ink; g.textAlign = 'center'; g.fillText('N', x, y - r - 4);
+  g.restore();
+}
+
+// ---------- picking a hex ----------
+function hexAt(px, py) {
+  const x = (px - ox) / size, y = (py - oy) / size;
+  let q = (Math.sqrt(3) / 3 * x - y / 3), r = (2 / 3 * y);
+  let s = -q - r, rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - s);
+  if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+  return cell(rq, rr);
+}
+
+// ---------- the day's hand ----------
+const hand = ['cottage', 'well', 'mill'];
+const cardsEl = document.getElementById('cards');
+const statusEl = document.getElementById('status');
+function renderCards() {
+  cardsEl.innerHTML = '';
+  for (const type of hand) {
+    const b = document.createElement('button');
+    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(picked === type)); b.disabled = Boolean(placed);
+    const cv = document.createElement('canvas'); cv.width = 128; cv.height = 128;
+    b.append(cv);
+    b.insertAdjacentHTML('beforeend', `<b>${TILES[type].name}</b><small>${TILES[type].rule}</small>`);
+    b.onclick = () => { picked = picked === type ? null : type; statusEl.textContent = picked ? `Choose where the ${TILES[type].name.toLowerCase()} goes.` : 'Pick a tile, then a spot on the island.'; renderCards(); draw(); };
+    cardsEl.append(b);
+    // Draw the icon with the same pen into the card.
+    const saved = size; size = 22;
+    drawIconInto(cv.getContext('2d'), type);
+    size = saved;
+  }
+}
+function drawIconInto(ctx2, type) {
+  const prev = g; gSwap(ctx2);
+  const hex = [...Array(6)].map((_, i) => { const a = Math.PI / 180 * (60 * i - 30); return { x: 64 + 58 * Math.cos(a), y: 64 + 58 * Math.sin(a) }; });
+  ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  wash(hex, C.land, rng(5), 0.35, 3);
+  drawTile(type, { x: 64, y: 66 }, 50, rng(9));
+  gSwap(prev);
+}
+function gSwap(ctx) { g = ctx; }
+
+// ---------- charter progress: cottages with a well beside them ----------
+const bar = document.getElementById('bar');
+function updateCharter() {
+  const cottages = [...cells.values()].filter((c) => c.tile === 'cottage');
+  const watered = cottages.filter((c) => neighbours(c).some((n) => n.tile === 'well'));
+  bar.style.width = `${Math.round((watered.length / Math.max(1, cottages.length)) * 100)}%`;
+  document.getElementById('count').textContent = `${watered.length} of ${cottages.length} cottages have a well beside them`;
+}
+
+// ---------- input ----------
+const tip = document.getElementById('tip');
+function pointer(e) { const b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+canvas.addEventListener('pointermove', (e) => {
+  const p = pointer(e); const c = hexAt(p.x, p.y);
+  if (c !== hover) { hover = c; draw(); }
+  if (c && c.tile && !picked) { tip.style.display = 'block'; tip.style.left = p.x + 'px'; tip.style.top = p.y + 'px'; tip.textContent = `${TILES[c.tile].name}, built by u/${c.by} on day ${c.day}`; }
+  else tip.style.display = 'none';
+});
+canvas.addEventListener('pointerleave', () => { hover = null; tip.style.display = 'none'; draw(); });
+canvas.addEventListener('pointerdown', (e) => {
+  const p = pointer(e); const c = hexAt(p.x, p.y);
+  if (!picked || placed) return;
+  if (!canPlace(picked, c)) { statusEl.textContent = picked === 'lighthouse' ? 'A lighthouse has to stand on the coast.' : 'That spot is taken or under water.'; return; }
+  const pts = score(picked, c);
+  c.tile = picked; c.by = 'you'; c.day = 12; placed = c;
+  statusEl.textContent = `${TILES[picked].name} built for ${pts} ${pts === 1 ? 'point' : 'points'}. Come back tomorrow for a new hand.`;
+  picked = null; hover = null; renderCards(); updateCharter(); draw();
+});
+window.addEventListener('resize', () => { layout(); draw(); });
+document.fonts.ready.then(() => { layout(); renderCards(); updateCharter(); draw(); });
+</script>
+</body>
+</html>
