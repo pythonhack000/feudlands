@@ -25,8 +25,8 @@
   main { width: 100%; max-width: 480px; height: 100vh; display: flex; flex-direction: column; }
   header { padding: 14px 18px 6px; }
   .title-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  h1 { font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 34px; margin: 0; letter-spacing: 0.02em; }
-  .day { font-style: italic; color: var(--ink-soft); font-size: 17px; }
+  h1 { font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 30px; margin: 0; letter-spacing: 0.02em; white-space: nowrap; }
+  .day { font-style: italic; color: var(--ink-soft); font-size: 15px; text-align: right; line-height: 1.15; }
   .charter { margin-top: 6px; display: flex; gap: 10px; align-items: center; }
   .seal { width: 34px; height: 34px; flex: none; }
   .charter p { margin: 0; font-size: 17px; line-height: 1.2; }
@@ -40,6 +40,13 @@
   .tray { padding: 8px 12px 14px; }
   .status { text-align: center; font-style: italic; color: var(--ink-soft); font-size: 16px; margin: 0 0 8px; min-height: 20px; }
   .cards { display: flex; gap: 10px; }
+  .feed { list-style: none; margin: 0 0 6px; padding: 0; font-size: 15px; height: 56px; overflow: hidden; }
+  .feed li { display: flex; gap: 6px; align-items: baseline; line-height: 1.2; animation: inkin .5s ease-out; }
+  .feed li:nth-child(2) { opacity: .7; } .feed li:nth-child(3) { opacity: .45; }
+  .feed i { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; transform: translateY(1px); }
+  .feed b { font-weight: 400; } .feed em { color: var(--vermilion); font-style: normal; margin-left: auto; }
+  @keyframes inkin { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .feed li { animation: none; } }
   .card { flex: 1; background: rgba(255,250,236,.55); border: 1px solid rgba(58,42,28,.35); padding: 6px 6px 8px; text-align: center; cursor: pointer; font: inherit; color: inherit; transition: transform .15s, border-color .15s; }
   .card canvas { width: 64px; height: 64px; margin: 0 auto; }
   .card b { display: block; font-family: 'IM Fell English SC', serif; font-weight: 400; font-size: 18px; }
@@ -54,7 +61,7 @@
   <header>
     <div class="title-row">
       <h1>The Commons</h1>
-      <span class="day">Day 12</span>
+      <span class="day">Day 12<br><span id="here">17</span> building now</span>
     </div>
     <div class="charter">
       <svg class="seal" viewBox="0 0 40 40" aria-hidden="true">
@@ -74,7 +81,8 @@
     <div class="tip" id="tip"></div>
   </div>
   <div class="tray">
-    <p class="status" id="status">Pick a tile, then a spot on the island.</p>
+    <ol class="feed" id="feed" aria-live="polite"></ol>
+    <p class="status" id="status">Pick a tile, then a spot on the island. You have three today.</p>
     <div class="cards" id="cards"></div>
   </div>
 </main>
@@ -229,7 +237,7 @@ function layout() {
   size = Math.min(box.width / (maxX - minX), box.height / (maxY - minY));
   ox = box.width / 2 - size * (minX + maxX) / 2; oy = box.height / 2 - size * (minY + maxY) / 2;
 }
-let hover = null, picked = null, placed = null;
+let hover = null, picked = null;
 function draw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   const w = canvas.width / dpr, h = canvas.height / dpr;
@@ -261,20 +269,43 @@ function draw() {
       else if (hash(c.q, c.r, i) > 0.35) { g.setLineDash([1, 3]); inkLine(a.x, a.y, b.x, b.y, rand, 0.5, 'rgba(58,42,28,.3)'); g.setLineDash([]); }
     });
   }
-  // Tiles.
-  for (const c of land) if (c.tile) drawTile(c.tile, center(c), size, rng(c.q * 31 + c.r * 17 + 3));
-  // Your tile today, circled in red.
-  if (placed) { const p = center(placed); g.strokeStyle = C.roof; g.lineWidth = 1.6; g.beginPath(); g.ellipse(p.x, p.y, size * 1.05, size * .95, -0.2, 0.2, Math.PI * 2.1); g.stroke(); }
+  // Tiles, with today's newest drawing themselves in.
+  const now = performance.now();
+  for (const c of land) {
+    if (!c.tile) continue;
+    const age = c.bornAt ? now - c.bornAt : Infinity;
+    const p = center(c);
+    if (age < INK_MS) {
+      const k = age / INK_MS;
+      g.save(); g.globalAlpha = k; g.translate(p.x, p.y); g.scale(0.6 + 0.4 * k, 0.6 + 0.4 * k); g.translate(-p.x, -p.y);
+      drawTile(c.tile, p, size, rng(c.q * 31 + c.r * 17 + 3)); g.restore();
+    } else drawTile(c.tile, p, size, rng(c.q * 31 + c.r * 17 + 3));
+  }
+  // Today's builders plant a pennant in their colour; yours are red.
+  for (const c of land) if (c.tile && c.day === TODAY) pennant(center(c), colourOf(c.by));
+  // A name and score float above each fresh build for a moment.
+  for (const c of land) {
+    const age = c.bornAt ? now - c.bornAt : Infinity;
+    if (age > LABEL_MS) continue;
+    const p = center(c), k = Math.min(1, age / 300) * Math.min(1, (LABEL_MS - age) / 500);
+    g.save(); g.globalAlpha = k; g.font = `italic ${Math.round(size * 0.7)}px 'IM Fell English', serif`; g.textAlign = 'center';
+    const text = `${c.by === 'you' ? 'you' : 'u/' + c.by}  +${c.points}`;
+    const tw = g.measureText(text).width, y = p.y - size * 1.45 - (age / LABEL_MS) * size * 0.4;
+    g.fillStyle = 'rgba(239,227,200,.92)'; g.fillRect(p.x - tw / 2 - 5, y - size * 0.62, tw + 10, size * 0.85);
+    g.strokeStyle = colourOf(c.by); g.lineWidth = 1; g.strokeRect(p.x - tw / 2 - 5, y - size * 0.62, tw + 10, size * 0.85);
+    g.fillStyle = C.ink; g.fillText(text, p.x, y); g.restore();
+  }
   // Hover preview.
-  if (hover && picked && canPlace(picked, hover)) {
+  if (hover && pickedType() && canPlace(pickedType(), hover)) {
     const p = center(hover);
     wash(corners(hover, size * 0.95), C.roof, rand, 0.1, 2);
-    drawTile(picked, p, size, rng(1), true);
-    const pts = score(picked, hover);
+    drawTile(pickedType(), p, size, rng(1), true);
+    const pts = score(pickedType(), hover);
     g.font = `italic ${Math.round(size * 0.85)}px 'IM Fell English', serif`; g.fillStyle = C.roof; g.textAlign = 'center';
-    g.fillText(pts ? `+${pts}` : '+0', p.x + size * 0.9, p.y - size * 0.8);
-  } else if (hover && picked && hover.land) {
-    g.strokeStyle = 'rgba(58,42,28,.4)'; g.lineWidth = 1; inkLine(center(hover).x - 5, center(hover).y - 5, center(hover).x + 5, center(hover).y + 5, rand); inkLine(center(hover).x + 5, center(hover).y - 5, center(hover).x - 5, center(hover).y + 5, rand);
+    g.fillText(`+${pts}`, p.x + size * 0.95, p.y - size * 0.75);
+  } else if (hover && pickedType() && hover.land) {
+    const p = center(hover);
+    inkLine(p.x - 5, p.y - 5, p.x + 5, p.y + 5, rand, 1, 'rgba(58,42,28,.5)'); inkLine(p.x + 5, p.y - 5, p.x - 5, p.y + 5, rand, 1, 'rgba(58,42,28,.5)');
   }
   drawCompass(w - 44, h - 46, 26, rand);
 }
@@ -287,6 +318,26 @@ function drawCompass(x, y, r, rand) {
   g.restore();
 }
 
+const TODAY = 12, INK_MS = 700, LABEL_MS = 2600;
+const INKS = ['#2f5d8a', '#5a7d2e', '#7b4f9e', '#a0662a', '#2e7d74', '#8a3b5c', '#4a5568'];
+const colourOf = (name) => name === 'you' ? C.roof : INKS[[...name].reduce((h, ch) => h * 31 + ch.charCodeAt(0), 7) % INKS.length];
+function pennant(p, colour) {
+  const x = p.x + size * 0.55, y = p.y - size * 0.35, u = size / 20;
+  g.save(); g.strokeStyle = C.ink; g.lineWidth = 0.9 * u; g.beginPath(); g.moveTo(x, y + 6 * u); g.lineTo(x, y - 9 * u); g.stroke();
+  g.fillStyle = colour; g.beginPath(); g.moveTo(x, y - 9 * u); g.lineTo(x + 7 * u, y - 6.5 * u); g.lineTo(x, y - 4 * u); g.closePath(); g.fill(); g.restore();
+}
+// Redraw every frame while something is inking in or labelled.
+let raf = 0;
+function animate() {
+  cancelAnimationFrame(raf);
+  const tick = () => {
+    draw();
+    const now = performance.now();
+    if ([...cells.values()].some((c) => c.bornAt && now - c.bornAt < LABEL_MS)) raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+}
+
 // ---------- picking a hex ----------
 function hexAt(px, py) {
   const x = (px - ox) / size, y = (py - oy) / size;
@@ -297,36 +348,35 @@ function hexAt(px, py) {
   return cell(rq, rr);
 }
 
-// ---------- the day's hand ----------
-const hand = ['cottage', 'well', 'mill'];
+// ---------- the day's hand: three tiles, each used once ----------
+const hand = [{ type: 'cottage', used: false }, { type: 'well', used: false }, { type: 'mill', used: false }];
 const cardsEl = document.getElementById('cards');
 const statusEl = document.getElementById('status');
+let myPoints = 0;
 function renderCards() {
   cardsEl.innerHTML = '';
-  for (const type of hand) {
+  hand.forEach((slot, i) => {
     const b = document.createElement('button');
-    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(picked === type)); b.disabled = Boolean(placed);
+    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(picked === i)); b.disabled = slot.used;
     const cv = document.createElement('canvas'); cv.width = 128; cv.height = 128;
     b.append(cv);
-    b.insertAdjacentHTML('beforeend', `<b>${TILES[type].name}</b><small>${TILES[type].rule}</small>`);
-    b.onclick = () => { picked = picked === type ? null : type; statusEl.textContent = picked ? `Choose where the ${TILES[type].name.toLowerCase()} goes.` : 'Pick a tile, then a spot on the island.'; renderCards(); draw(); };
+    b.insertAdjacentHTML('beforeend', `<b>${TILES[slot.type].name}</b><small>${slot.used ? 'Built' : TILES[slot.type].rule}</small>`);
+    b.onclick = () => { picked = picked === i ? null : i; statusEl.textContent = picked !== null ? `Choose where the ${TILES[slot.type].name.toLowerCase()} goes.` : 'Pick a tile, then a spot on the island.'; renderCards(); draw(); };
     cardsEl.append(b);
-    // Draw the icon with the same pen into the card.
     const saved = size; size = 22;
-    drawIconInto(cv.getContext('2d'), type);
+    drawIconInto(cv.getContext('2d'), slot.type);
     size = saved;
-  }
+  });
 }
+const pickedType = () => (picked === null ? null : hand[picked].type);
 function drawIconInto(ctx2, type) {
-  const prev = g; gSwap(ctx2);
+  const prev = g; g = ctx2;
   const hex = [...Array(6)].map((_, i) => { const a = Math.PI / 180 * (60 * i - 30); return { x: 64 + 58 * Math.cos(a), y: 64 + 58 * Math.sin(a) }; });
   ctx2.setTransform(1, 0, 0, 1, 0, 0);
   wash(hex, C.land, rng(5), 0.35, 3);
   drawTile(type, { x: 64, y: 66 }, 50, rng(9));
-  gSwap(prev);
+  g = prev;
 }
-function gSwap(ctx) { g = ctx; }
-
 // ---------- charter progress: cottages with a well beside them ----------
 const bar = document.getElementById('bar');
 function updateCharter() {
@@ -336,27 +386,52 @@ function updateCharter() {
   document.getElementById('count').textContent = `${watered.length} of ${cottages.length} cottages have a well beside them`;
 }
 
-// ---------- input ----------
+// ---------- building, yours and everyone else's ----------
+const feedEl = document.getElementById('feed');
+function build(c, type, by) {
+  const points = score(type, c);
+  Object.assign(c, { tile: type, by, day: TODAY, points, bornAt: performance.now() });
+  const li = document.createElement('li');
+  li.innerHTML = `<i style="background:${colourOf(by)}"></i><span><b>${by === 'you' ? 'You' : 'u/' + by}</b> built a ${TILES[type].name.toLowerCase()}</span><em>+${points}</em>`;
+  feedEl.prepend(li);
+  while (feedEl.children.length > 3) feedEl.lastChild.remove();
+  updateCharter(); animate();
+  return points;
+}
+// Other players: each picks a decent spot for a tile from their own hand.
+const crowd = rng(99);
+function someoneBuilds() {
+  const by = NAMES[Math.floor(crowd() * NAMES.length)];
+  const type = ['cottage', 'field', 'grove', 'well', 'field', 'grove', 'cottage', 'mill'][Math.floor(crowd() * 8)];
+  const spots = [...cells.values()].filter((c) => canPlace(type, c)).sort(() => crowd() - 0.5).slice(0, 12);
+  const best = spots.sort((a, b) => score(type, b) - score(type, a))[0];
+  if (best) build(best, type, by);
+  document.getElementById('here').textContent = String(14 + Math.floor(crowd() * 9));
+  setTimeout(someoneBuilds, 2500 + crowd() * 3500);
+}
+
 const tip = document.getElementById('tip');
 function pointer(e) { const b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
 canvas.addEventListener('pointermove', (e) => {
   const p = pointer(e); const c = hexAt(p.x, p.y);
   if (c !== hover) { hover = c; draw(); }
-  if (c && c.tile && !picked) { tip.style.display = 'block'; tip.style.left = p.x + 'px'; tip.style.top = p.y + 'px'; tip.textContent = `${TILES[c.tile].name}, built by u/${c.by} on day ${c.day}`; }
+  if (c && c.tile && picked === null) { tip.style.display = 'block'; tip.style.left = p.x + 'px'; tip.style.top = p.y + 'px'; tip.textContent = `${TILES[c.tile].name}, built by ${c.by === 'you' ? 'you' : 'u/' + c.by} on day ${c.day}`; }
   else tip.style.display = 'none';
 });
 canvas.addEventListener('pointerleave', () => { hover = null; tip.style.display = 'none'; draw(); });
 canvas.addEventListener('pointerdown', (e) => {
-  const p = pointer(e); const c = hexAt(p.x, p.y);
-  if (!picked || placed) return;
-  if (!canPlace(picked, c)) { statusEl.textContent = picked === 'lighthouse' ? 'A lighthouse has to stand on the coast.' : 'That spot is taken or under water.'; return; }
-  const pts = score(picked, c);
-  c.tile = picked; c.by = 'you'; c.day = 12; placed = c;
-  statusEl.textContent = `${TILES[picked].name} built for ${pts} ${pts === 1 ? 'point' : 'points'}. Come back tomorrow for a new hand.`;
-  picked = null; hover = null; renderCards(); updateCharter(); draw();
+  const p = pointer(e); const c = hexAt(p.x, p.y); const type = pickedType();
+  if (!type) return;
+  if (!canPlace(type, c)) { statusEl.textContent = type === 'lighthouse' ? 'A lighthouse has to stand on the coast.' : 'That spot is taken or under water.'; return; }
+  myPoints += build(c, type, 'you');
+  hand[picked].used = true; picked = null; hover = null;
+  const left = hand.filter((slot) => !slot.used).length;
+  statusEl.textContent = left ? `${myPoints} points today. ${left} ${left === 1 ? 'tile' : 'tiles'} left.` : `${myPoints} points today. Your hand is spent; a new one comes tomorrow.`;
+  renderCards();
 });
-window.addEventListener('resize', () => { layout(); draw(); });
-document.fonts.ready.then(() => { layout(); renderCards(); updateCharter(); draw(); });
+// The canvas follows its box, so the hex under the pointer is always the one drawn there.
+new ResizeObserver(() => { layout(); draw(); }).observe(canvas);
+document.fonts.ready.then(() => { updateCharter(); renderCards(); layout(); draw(); setTimeout(someoneBuilds, 1200); });
 </script>
 </body>
 </html>
