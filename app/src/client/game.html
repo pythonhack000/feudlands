@@ -28,6 +28,14 @@
   canvas#map { display: block; width: 100%; height: 100%; touch-action: none; }
   .tip { position: absolute; pointer-events: none; background: rgba(239,227,200,.95); border: 1px solid var(--ink-soft); padding: 4px 8px; font-size: 15px; white-space: nowrap; transform: translate(-50%, -120%); display: none; }
   .tray { padding: 6px 12px 14px; }
+  /* Wide, short windows (a post on desktop): the map takes the left, everything else stacks on the right. */
+  @media (min-width: 600px) and (min-aspect-ratio: 1/1) {
+    main { max-width: 1180px; display: grid; grid-template-columns: minmax(0, 1fr) 330px; grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "map header" "map tray"; }
+    header { grid-area: header; }
+    .map-wrap { grid-area: map; }
+    .tray { grid-area: tray; display: flex; flex-direction: column; justify-content: flex-end; padding: 6px 16px 16px; }
+    .feed { height: auto; max-height: 96px; }
+  }
   .feed { list-style: none; margin: 0 0 6px; padding: 0; font-size: 15px; height: 56px; overflow: hidden; }
   .feed li { display: flex; gap: 6px; align-items: baseline; line-height: 1.2; animation: inkin .5s ease-out; }
   .feed li:nth-child(2) { opacity: .7; } .feed li:nth-child(3) { opacity: .45; }
@@ -56,6 +64,9 @@
   .pick button small { color: var(--ink-soft); font-size: 14px; }
   .pick .next { font-size: 15px; }
   .brag { display: flex; gap: 10px; align-items: baseline; margin-top: 6px !important; font-size: 13px !important; }
+  .rules ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: 17px; line-height: 1.3; }
+  .rules b { font-weight: 400; font-family: 'IM Fell English SC', serif; }
+  .sheet .go { align-self: flex-start; font: inherit; font-size: 18px; color: var(--parchment); background: var(--ink); border: 0; padding: 8px 20px; cursor: pointer; }
   .day-end { text-align: center; margin: -4px 0 10px; }
   .day-end button { font: inherit; font-size: 17px; color: var(--ink); background: rgba(255,250,236,.55); border: 1px solid var(--ink); padding: 6px 16px; cursor: pointer; }
   .day-end button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }

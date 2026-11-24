@@ -296,7 +296,7 @@ function draw() {
       swords(p, size / 20 * 1.1, 1, SIDES[mySide].ink);
       const atk = attackOf(hover, mySide, bestCry(mySide)), def = defenceOf(hover);
       g.font = `italic ${Math.round(size * .8)}px 'IM Fell English', serif`; g.textAlign = 'left'; g.fillStyle = atk > def ? SIDES[mySide].ink : C.ink;
-      g.fillText(`${atk} vs ${def}`, p.x + size * .8, p.y - size * .6);
+      g.fillText(atk > def ? `${atk} beats ${def}` : `${atk} can\u2019t beat ${def}`, p.x + size * .8, p.y - size * .6);
     } else if (hover.land) { inkLine(p.x - 5, p.y - 5, p.x + 5, p.y + 5, rand, 1, 'rgba(58,42,28,.5)'); inkLine(p.x + 5, p.y - 5, p.x - 5, p.y + 5, rand, 1, 'rgba(58,42,28,.5)'); }
   } else if (hover && kind && mySide && isFree(hover)) {
     const p = center(hover);
@@ -331,7 +331,7 @@ function assault(c, side, by, cry) {
     if (cry) { cry.taken = (cry.taken || 0) + 1 + boxed.length; credit(cry.by, 0); }
   }
   const who = by === 'you' ? 'You' : titled(by);
-  log(`<span>${who} charged the ${SIDES[enemy].name.toLowerCase()}, ${atk} vs ${def}: ${won ? 'taken' : 'held'}</span><em>${won ? '+3' : '+0'}</em>`, side);
+  log(`<span>${who} charged the ${SIDES[enemy].name.toLowerCase()}, ${atk} against ${def}: ${won ? 'taken' : 'held off'}</span><em>${won ? '+3' : '+0'}</em>`, side);
   setTimeout(() => { tally(); showRank(); }, 900); animate();
   return won ? 3 : 0;
 }
@@ -444,8 +444,10 @@ document.querySelectorAll('#pick button').forEach((btn) => btn.addEventListener(
   mySide = btn.dataset.side;
   document.getElementById('pick').remove();
   const you = document.getElementById('you');
-  you.innerHTML = '<span id="rank"></span><button type="button" id="openCouncil">War council</button><button type="button" id="openGallery">Banners</button><button type="button" id="openEasel">Draw one</button><button type="button" id="openMidnight">Midnight</button>';
+  you.innerHTML = '<span id="rank"></span><button type="button" id="openRules">How to play</button><button type="button" id="openCouncil">War council</button><button type="button" id="openGallery">Banners</button><button type="button" id="openEasel">Draw one</button><button type="button" id="openMidnight">Midnight</button>';
   document.getElementById('openMidnight').onclick = openMidnight;
+  document.getElementById('openRules').onclick = openRules;
+  openRules();
   showRank();
   document.getElementById('openGallery').onclick = openGallery;
   document.getElementById('openEasel').onclick = openEasel;
@@ -647,7 +649,8 @@ function afterMove() {
 function openCry(target, slotIndex) {
   const def = defenceOf(target), name = SIDES[mySide].name.toLowerCase();
   const el = sheet(`<header><h2>Battle cry</h2><button class="close" type="button">Hold back</button></header>
-    <p>The ${SIDES[target.side].name.toLowerCase()} hold this hex with ${def}. Shout one of the ${name}' arguments: every ${CRY_VOTES} upvotes it has adds 1 to your charge.</p>
+    <p>The ${SIDES[target.side].name.toLowerCase()} defend this hex with <b>${def}</b>: ${STRENGTH[target.kind]} for the ${target.kind}, ${ownNear(target, target.side)} for their land around it, ${HOME} for holding it. Your attack is <b>${attackOf(target, mySide, null)}</b> before a battle cry: 1 for the charge and ${ownNear(target, mySide)} for your land around it. Beat ${def} to take it.</p>
+    <p>Pick a battle cry. Every ${CRY_VOTES} upvotes it has in the war council add 1 to your attack.</p>
     <div class="write"><input maxlength="120" placeholder="Or write your own" aria-label="Your own battle cry" /><button class="vote" type="button">Shout it</button></div>
     <p style="font-size:13px">A new cry starts with no strength. It goes to the war council, and every ${CRY_VOTES} points it earns there make each charge that shouts it stronger. You're credited with every hex it takes.</p>
     <div class="council"></div>`);
@@ -661,7 +664,7 @@ function openCry(target, slotIndex) {
   [...options, null].forEach((cry) => {
     const atk = attackOf(target, mySide, cry), wins = atk > def;
     const row = document.createElement('button'); row.type = 'button'; row.className = 'arg'; row.style.borderColor = SIDES[mySide].ink; row.style.textAlign = 'left'; row.style.font = 'inherit'; row.style.cursor = 'pointer'; row.style.color = 'inherit';
-    row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : titled(cry.by)}, ${cry.votes} points, +${cryPower(cry)}${rebuttalOf(cry) && rawPower(rebuttalOf(cry)) ? ` (rebutted by ${titled(rebuttalOf(cry).by)}, \u2212${rawPower(rebuttalOf(cry))})` : ''}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${atk} vs ${def}</span>`;
+    row.innerHTML = `<div style="flex:1">${cry ? `<q>${cry.text.replace(/[<>&]/g, '')}</q><small>${cry.by === 'you' ? 'you' : titled(cry.by)}, ${cry.votes} points, +${cryPower(cry)}${rebuttalOf(cry) && rawPower(rebuttalOf(cry)) ? ` (rebutted by ${titled(rebuttalOf(cry).by)}, \u2212${rawPower(rebuttalOf(cry))})` : ''}</small>` : '<q>No battle cry</q><small>Just you and your neighbours</small>'}</div><span class="vote" style="border-color:${wins ? SIDES[mySide].ink : 'rgba(58,42,28,.4)'}">${wins ? `Takes it, ${atk} to ${def}` : `Held off, ${atk} to ${def}`}</span>`;
     row.onclick = () => {
       el.remove();
       myPoints += assault(target, mySide, 'you', cry);
@@ -670,6 +673,21 @@ function openCry(target, slotIndex) {
     };
     list.append(row);
   });
+}
+// ---------- how to play: shown once you pick a side, and from the header ----------
+function openRules() {
+  const name = SIDES[mySide].name.toLowerCase(), enemy = SIDES[mySide === 'a' ? 'b' : 'a'].name.toLowerCase();
+  const el = sheet(`<header><h2>How to play</h2><button class="close" type="button">Close</button></header>
+    <div class="rules"><ol>
+      <li>You fight for the <span style="color:${SIDES[mySide].ink}">${name}</span>. Whoever holds more of the island at midnight wins the day.</li>
+      <li><b>Camp</b>: put it on any empty hex. Surround an enemy camp on every side and it becomes yours. A <b>tower</b> can't be surrounded.</li>
+      <li><b>Charge</b>: attack a ${enemy.replace(/s$/, '')} hex that touches your land. You take it if your attack is higher than its defence. A tie means they hold.</li>
+      <li>Attack is 1, plus 1 for each of your hexes touching it, plus your battle cry. Defence is 1 for a camp or 3 for a tower, plus 1 for each of their hexes touching it, plus 1 for holding it.</li>
+      <li>Battle cries are arguments from the <b>war council</b>. Every ${CRY_VOTES} upvotes make a cry 1 stronger, and a good rebuttal from the other side weakens it. Argue well and your side hits harder.</li>
+    </ol></div>
+    <button class="go" type="button">To war</button>`);
+  el.querySelector('.go').onclick = () => el.remove();
+  return el;
 }
 // ---------- midnight: the day's result, pinned under the post ----------
 // What the day meant for you. A day you skipped still says how close it was, so tomorrow has a reason.
