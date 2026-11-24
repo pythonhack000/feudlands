@@ -1,0 +1,27 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "feudlands",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": { "inline": true, "entry": "splash.html" },
+      "game": { "entry": "game.html" }
+    }
+  },
+  "server": { "dir": "dist/server", "entry": "index.cjs" },
+  "menu": {
+    "items": [
+      {
+        "label": "Feudlands: post today's feud",
+        "description": "Posts the day's war for the subreddit to fight",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/post-feud"
+      }
+    ]
+  },
+  "triggers": { "onAppInstall": "/internal/triggers/on-app-install" },
+  "scripts": { "dev": "vite build --watch", "build": "vite build" },
+  "permissions": { "redis": true, "reddit": { "enable": true } },
+  "dev": { "subreddit": "feudlands_dev" }
+}
