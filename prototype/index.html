@@ -444,6 +444,7 @@ function wrap(text, width) { const out = []; let line = ''; for (const w of text
 const bestCry = (side) => [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[0] || null;
 function assault(c, side, by, cry) {
   const now = performance.now(), atk = attackOf(c, side, cry), def = defenceOf(c), won = atk > def, enemy = c.side;
+  for (let i = battles.length - 1; i >= 0; i--) if (now - battles[i].at > BATTLE_MS) battles.splice(i, 1);
   battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won, seed: Math.floor(now) });
   if (won) {
     Object.assign(c, { side, kind: 'camp', by, flipAt: now + 900, label: null });
@@ -497,14 +498,23 @@ function move(c, kind, side, by) {
 }
 // Other players look for the move that captures the most, else push the front line.
 const crowd = rng(99);
+// The demo crowd plays a day's worth of moves, then the front goes quiet. It waits while the tab is hidden.
+const CROWD_MOVES_PER_DAY = 80, HIDDEN_RECHECK_MS = 2000;
+const FREE_LAND_KEPT = 0.25; // the crowd stops building once only this share of land is free, so you always have room
+let crowdMoves = 0;
 function someoneMoves() {
+  if (document.hidden) { setTimeout(someoneMoves, HIDDEN_RECHECK_MS); return; }
+  if (crowdMoves >= CROWD_MOVES_PER_DAY) { log('<span>The front has gone quiet. The island is decided at midnight.</span>', mySide || 'a'); return; }
+  crowdMoves++;
   const by = NAMES[Math.floor(crowd() * NAMES.length)], side = sideOf(by);
-  if (crowd() < 0.45) {
+  const land = [...cells.values()].filter((c) => c.land);
+  const crowded = land.filter(isFree).length <= land.length * FREE_LAND_KEPT;
+  if (crowded || crowd() < 0.45) {
     const cry = [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[Math.floor(crowd() * 2)] || null;
     const targets = [...cells.values()].filter((c) => canCharge(c, side)).map((c) => ({ c, v: attackOf(c, side, cry) - defenceOf(c) + crowd() })).sort((x, y) => y.v - x.v);
     if (targets[0]) { assault(targets[0].c, side, by, cry); setTimeout(someoneMoves, 3000 + crowd() * 3000); return; }
   }
-  const free = [...cells.values()].filter(isFree);
+  const free = crowded ? [] : [...cells.values()].filter(isFree);
   const scored = free.map((c) => ({ c, v: wouldCapture(c, side) * 5 + landNeighbours(c).filter((n) => n.side).length + crowd() * 2 }));
   scored.sort((x, y) => y.v - x.v);
   const pick = scored[Math.floor(crowd() * Math.min(3, scored.length))];
