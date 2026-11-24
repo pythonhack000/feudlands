@@ -5,6 +5,7 @@
   "license": "BSD-3-Clause",
   "type": "module",
   "scripts": {
+    "login": "NODE_OPTIONS=\"--require ./tools/reddit-dns.cjs\" devvit login",
     "build": "vite build",
     "dev": "NODE_OPTIONS=\"--require ./tools/reddit-dns.cjs\" devvit playtest",
     "deploy": "NODE_OPTIONS=\"--require ./tools/reddit-dns.cjs\" devvit upload",
