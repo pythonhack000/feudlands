@@ -142,7 +142,7 @@ export function play(cells: Island, m: Move): Outcome {
   const c = cellAt(cells, m.q, m.r);
   if (!m.side) return null;
   if (m.t === 'build') return isFree(c) ? build(cells, c, m.kind, m.side, m.by) : null;
-  return canCharge(cells, c, m.side) ? charge(cells, c, m.side, m.by, m.cry ? m.cry.power : 0, m.cry ? m.cry.id : null) : null;
+  return canCharge(cells, c, m.side) ? charge(cells, c, m.side, m.by, (m.cry ? m.cry.power : 0) + (m.fleet ?? 0), m.cry ? m.cry.id : null) : null;
 }
 
 /** Hexes a move took: the charged hex if it fell, plus everything boxed in. */

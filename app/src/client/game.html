@@ -24,6 +24,12 @@
   .rope span { position: absolute; inset: 0 auto 0 0; background: var(--a); transition: width .6s ease; }
   .rope::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink); opacity: .6; }
   .pct { font-variant-numeric: tabular-nums; }
+  .isles { display: flex; gap: 6px; margin-top: 6px; min-height: 30px; overflow-x: auto; scrollbar-width: none; }
+  .isles button { display: flex; flex-direction: column; gap: 3px; min-width: 64px; font: inherit; font-size: 13px; color: var(--ink); background: none; border: 1px solid rgba(58,42,28,.3); padding: 3px 7px 4px; cursor: pointer; text-align: left; }
+  .isles button[aria-current="true"] { border-color: var(--ink); background: rgba(58,42,28,.07); }
+  .isles button .bar { display: flex; height: 4px; background: rgba(58,42,28,.15); }
+  .isles button .bar i { display: block; }
+  .isles button small { font-style: italic; color: var(--ink-soft); }
   .you { font-style: italic; color: var(--ink-soft); font-size: 14px; margin-top: 4px; min-height: 40px; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
   .feud-by { margin: -2px 0 4px; font-style: italic; font-size: 13px; color: var(--ink-soft); }
   .suggest .write { margin-top: 6px; }
@@ -138,6 +144,7 @@
       <div class="rope"><span id="rope" style="width:50%"></span></div>
       <span class="side b"><svg width="14" height="17" viewBox="0 0 54 64"><path d="M4 2h46v30c0 16-12 26-23 30C16 58 4 48 4 32z" fill="#b5452f"/></svg><span id="nameB">Dogs</span> <span class="pct" id="pctB">50%</span></span>
     </div>
+    <div class="isles" id="isles" aria-label="The islands"></div>
     <div class="you" id="you"></div>
   </header>
   <div class="map-wrap">

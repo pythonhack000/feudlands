@@ -1,6 +1,7 @@
 import * as I from '../shared/island.ts';
 import { CRY_VOTES, LEGACY_DAY } from '../shared/rules.ts';
 import * as sound from './sound.js';
+import { fleetBonus, ISLE_NAMES, isleSeed } from '../shared/archipelago.ts';
 
 const { rng, hash, DIRS, NAMES, sideOf, isFree, STRENGTH, HOME } = I;
 
@@ -28,7 +29,15 @@ const canCharge = (c, side) => I.canCharge(cells, c, side);
 const rawPower = (x) => Math.max(0, Math.floor(x.votes / CRY_VOTES));
 const rebuttalOf = (cry) => (cry && cry.replies && cry.replies.length ? [...cry.replies].sort((x, y) => y.votes - x.votes)[0] : null);
 const cryPower = (cry) => (!cry ? 0 : typeof cry.power === 'number' ? cry.power : Math.max(0, rawPower(cry) - (rebuttalOf(cry) ? rawPower(rebuttalOf(cry)) : 0)));
-const attackOf = (c, side, cry) => I.attackOf(cells, c, side, cryPower(cry));
+// ---------- the archipelago: you fight on one island and can watch the others ----------
+const VIEW = new URLSearchParams(location.search).get('isle');
+let isles = { mine: null, viewing: VIEW === null ? 0 : Number(VIEW), stats: [] };
+const onOwnIsle = () => isles.mine !== null && isles.viewing === isles.mine;
+const isleName = (i) => ISLE_NAMES[i] || `Isle ${i + 1}`;
+/** Fleets from neighbouring islands your side holds: +1 each to your charges here. */
+const myFleet = () => (mySide && onOwnIsle() ? fleetBonus(isles.stats, isles.viewing, mySide) : 0);
+function goIsle(i) { const q = new URLSearchParams(location.search); q.set('isle', String(i)); location.search = q.toString(); }
+const attackOf = (c, side, cry) => I.attackOf(cells, c, side, cryPower(cry) + (side === mySide ? myFleet() : 0));
 const defenceOf = (c) => I.defenceOf(cells, c);
 
 // ---------- ranks: earned by hexes taken, across all days ----------
@@ -277,10 +286,10 @@ function hexAt(px, py) {
 
 function wrap(text, width) { const out = []; let line = ''; for (const w of text.split(' ')) { if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w; } else line += ' ' + w; } if (line.trim()) out.push(line.trim()); return out; }
 const bestCry = (side) => [...args].filter((a) => a.side === side).sort((x, y) => y.votes - x.votes)[0] || null;
-function assault(c, side, by, cry) {
+function assault(c, side, by, cry, fleet = 0) {
   const now = replaying ? -Infinity : performance.now();
   for (let i = battles.length - 1; i >= 0; i--) if (performance.now() - battles[i].at > BATTLE_MS) battles.splice(i, 1);
-  const o = I.charge(cells, c, side, by, cryPower(cry), cry && cry.id ? cry.id : null);
+  const o = I.charge(cells, c, side, by, cryPower(cry) + fleet, cry && cry.id ? cry.id : null);
   if (!replaying) {
     battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won: o.won, seed: Math.floor(now) });
     sound.clash(by === 'you');
@@ -308,12 +317,30 @@ function animate() {
 
 // ---------- score: the tug of war ----------
 function tally() {
+  // The big bar is the whole war: this island live, the others as the server last reported them.
   let a = 0, b = 0;
   for (const c of cells.values()) { if (c.side === 'a') a++; if (c.side === 'b') b++; }
+  if (isles.stats.length) renderIsles(a, b);
+  isles.stats.forEach((st, i) => { if (i !== isles.viewing) { a += st.a; b += st.b; } });
   const pa = Math.round((a / Math.max(1, a + b)) * 100);
   document.getElementById('rope').style.width = pa + '%';
   document.getElementById('pctA').textContent = pa + '%';
   document.getElementById('pctB').textContent = (100 - pa) + '%';
+}
+
+// The island bar: every island's tug of war, yours marked, the one you're watching outlined.
+function renderIsles(liveA, liveB) {
+  const el = document.getElementById('isles');
+  el.replaceChildren(...isles.stats.map((st, i) => {
+    const a = i === isles.viewing ? liveA : st.a, b = i === isles.viewing ? liveB : st.b, pa = Math.round((a / Math.max(1, a + b)) * 100);
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.setAttribute('aria-current', String(i === isles.viewing));
+    const tag = i === isles.mine ? 'yours' : a > b ? SIDES.a.name.toLowerCase() : b > a ? SIDES.b.name.toLowerCase() : 'split';
+    btn.innerHTML = `<span>${isleName(i)} <small>${tag}</small></span><span class="bar"><i style="width:${pa}%;background:${SIDES.a.ink}"></i><i style="width:${100 - pa}%;background:${SIDES.b.ink}"></i></span>`;
+    btn.setAttribute('aria-label', `${isleName(i)}: ${SIDES.a.name} ${pa}%, ${SIDES.b.name} ${100 - pa}%${i === isles.mine ? ', your island' : ''}`);
+    btn.onclick = () => { if (i !== isles.viewing) goIsle(i); };
+    return btn;
+  }));
 }
 
 // ---------- moves, yours and everyone else's ----------
@@ -349,7 +376,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 function setFeud(feud) {
   TODAY = feud.day;
   cells.clear();
-  I.makeIsland(TODAY).forEach((c, k) => cells.set(k, c)); // each day's island has its own coast
+  I.makeIsland(isleSeed(TODAY, isles.viewing)).forEach((c, k) => cells.set(k, c)); // each island has its own coast
   SIDES.a.name = feud.sides.a; SIDES.b.name = feud.sides.b;
   document.title = `Feudlands: ${feud.question}`;
   for (const id of ['question', 'pickQuestion']) { const el = document.getElementById(id); if (el) el.textContent = feud.question; }
@@ -457,7 +484,7 @@ async function api(path, body) {
   if (!out || !out.ok) throw new Error((out && out.error) || 'The war server stumbled. Try again.');
   return out.data;
 }
-const after = () => `after=${lastSeq}`;
+const after = () => `after=${lastSeq}&isle=${isles.viewing}`;
 // One move from the log. Returns the points it scored, or null if the board had already moved on.
 const dayLog = []; // every move so far today, for the replay
 function applyMove(m) {
@@ -474,7 +501,7 @@ function applyMove(m) {
   if (!canCharge(c, m.side)) return null;
   const said = m.cry && args.find((a) => a.id === m.cry.id);
   const cry = m.cry ? { ...(said || { text: '', by: m.by, side: m.side, replies: [] }), id: m.cry.id, power: m.cry.power } : null;
-  const gained = assault(c, m.side, by, cry);
+  const gained = assault(c, m.side, by, cry, m.fleet || 0);
   if (by === 'you') spend('charge', gained);
   return gained;
 }
@@ -486,6 +513,7 @@ function spend(kind, gained) {
 }
 function applyState(state) {
   myName = state.me.name;
+  isles = state.isles;
   myRecord = state.me.record;
   week = state.week;
   setBallot(state.next);
@@ -522,7 +550,7 @@ async function replayDay() {
   replayingDay = true; busy = true; hover = null; picked = null; battles.length = 0;
   document.querySelector('.sheet')?.remove();
   const now = [...cells.values()].map((c) => ({ c, side: c.side, kind: c.kind, by: c.by }));
-  const morning = I.makeIsland(TODAY);
+  const morning = I.makeIsland(isleSeed(TODAY, isles.viewing));
   for (const [k, c] of cells) Object.assign(c, { side: morning.get(k).side, kind: morning.get(k).kind, by: morning.get(k).by, bornAt: undefined, flipAt: undefined, label: null });
   tally(); draw();
   const moves = [...dayLog].sort((x, y) => x.seq - y.seq), step = Math.min(REPLAY_STEP_MAX_MS, REPLAY_MS / Math.max(1, moves.length));
@@ -616,7 +644,7 @@ function renderCards() {
     const fromCouncil = free.filter(({ slot }) => slot.rally).length;
     const isPicked = picked !== null && hand[picked].kind === kind;
     const b = document.createElement('button');
-    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(isPicked)); b.disabled = !free.length || !mySide;
+    b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(isPicked)); b.disabled = !free.length || !mySide || (isles.mine !== null && !onOwnIsle());
     const cv = document.createElement('canvas'); cv.width = 112; cv.height = 112; b.append(cv);
     const count = free.length > 1 ? ` <span class="count">\u00d7${free.length}</span>` : '';
     const note = !free.length ? 'Placed' : fromCouncil ? `${KINDS[kind].rule}. ${fromCouncil} sent by the council` : KINDS[kind].rule;
@@ -643,6 +671,7 @@ document.querySelectorAll('#pick button').forEach((btn) => btn.addEventListener(
   if (!myName) { document.getElementById('pickNote').textContent = 'Log in to Reddit to join the war. You can still watch.'; return; }
   try { applyState(await api(`side?${after()}`, { side: btn.dataset.side })); }
   catch (error) { document.getElementById('pickNote').textContent = error.message; return; }
+  if (isles.mine !== null && isles.mine !== isles.viewing) { goIsle(isles.mine); return; } // your regiment fights elsewhere
   joinSide(btn.dataset.side);
 }));
 function joinSide(side) {
@@ -651,7 +680,7 @@ function joinSide(side) {
   document.getElementById('pick')?.remove();
   showHeaderLinks();
   grantedRally = reinforcements(mySide);
-  statusEl.textContent = 'Pick a piece.';
+  statusEl.textContent = onOwnIsle() || isles.mine === null ? 'Pick a piece.' : `You're watching ${isleName(isles.viewing)}. Your fight is on ${isleName(isles.mine)}: tap it above.`;
   document.getElementById('skipTraining').onclick = () => advanceLesson(TRAINED);
   coach(); renderCards(); draw();
 }
@@ -845,6 +874,7 @@ canvas.addEventListener('pointerleave', () => { hover = null; tip.style.display 
 canvas.addEventListener('pointerdown', async (e) => {
   const p = pointer(e), c = hexAt(p.x, p.y), kind = pickedKind();
   if (!kind || !mySide || replayingDay) return;
+  if (!onOwnIsle()) { statusEl.textContent = `You're watching ${isleName(isles.viewing)}. Your fight is on ${isleName(isles.mine)}.`; return; }
   if (kind === 'charge') {
     if (!canCharge(c, mySide)) { statusEl.textContent = 'Charge an enemy hex that touches your land.'; return; }
     if (lesson < 3) { plainCharge(c); return; }
@@ -892,7 +922,7 @@ async function sendCharge(target, cryId) {
 function openCry(target) {
   const def = defenceOf(target), name = SIDES[mySide].name.toLowerCase();
   const el = sheet(`<header><h2>Battle cry</h2><button class="close" type="button">Hold back</button></header>
-    <p>The ${SIDES[target.side].name.toLowerCase()} defend this hex with <b>${def}</b>: ${STRENGTH[target.kind]} for the ${target.kind}, ${ownNear(target, target.side)} for their land around it, ${HOME} for holding it. Your attack is <b>${attackOf(target, mySide, null)}</b> before a battle cry: 1 for the charge and ${ownNear(target, mySide)} for your land around it. Beat ${def} to take it.</p>
+    <p>The ${SIDES[target.side].name.toLowerCase()} defend this hex with <b>${def}</b>: ${STRENGTH[target.kind]} for the ${target.kind}, ${ownNear(target, target.side)} for their land around it, ${HOME} for holding it. Your attack is <b>${attackOf(target, mySide, null)}</b> before a battle cry: 1 for the charge, ${ownNear(target, mySide)} for your land around it${myFleet() ? ` and ${myFleet()} from your fleets on the islands next door` : ''}. Beat ${def} to take it.</p>
     <p>Pick a battle cry. Every ${CRY_VOTES} upvotes it has in the war council add 1 to your attack.</p>
     <div class="write"><input maxlength="120" placeholder="Or write your own" aria-label="Your own battle cry" /><button class="vote" type="button">Shout it</button></div>
     <p style="font-size:13px">A new cry starts with no strength. It goes to the war council, and every ${CRY_VOTES} points it earns there make each charge that shouts it stronger. You're credited with every hex it takes.</p>
@@ -922,6 +952,7 @@ function openRules() {
       <li><b>Camp</b>: put it on any empty hex. Surround an enemy camp on every side and it becomes yours. A <b>tower</b> can't be surrounded.</li>
       <li><b>Charge</b>: attack a ${enemy.replace(/s$/, '')} hex that touches your land. You take it if your attack is higher than its defence. A tie means they hold.</li>
       <li>Attack is 1, plus 1 for each of your hexes touching it, plus your battle cry. Defence is 1 for a camp or 3 for a tower, plus 1 for each of their hexes touching it, plus 1 for holding it.</li>
+      <li>The war is fought over a chain of <b>islands</b>. You fight on yours and can watch the others. Hold an island and your side's <b>fleet</b> adds 1 to every charge on the islands beside it.</li>
       <li>Battle cries are arguments from the <b>war council</b>. Every ${CRY_VOTES} upvotes make a cry 1 stronger, and a good rebuttal from the other side weakens it. Argue well and your side hits harder.</li>
     </ol></div>
     <button class="go" type="button">To war</button>`);
@@ -993,12 +1024,14 @@ async function start() {
   tally(); renderCards(); layout(); draw();
   try {
     replaying = true;
-    const state = await api('state');
+    const state = await api(VIEW === null ? 'state' : `state?isle=${Number(VIEW)}`);
     myName = state.me.name;
+    isles = state.isles;
     setFeud(state.feud);
     layout();
-    if (state.me.side) joinSide(state.me.side); // your side from earlier today
     applyState(state);
+    // Your side from earlier today. Joined after the council loads, so rallies already earned aren't handed out again.
+    if (state.me.side) joinSide(state.me.side);
   } catch (error) {
     statusEl.textContent = error.message;
   } finally {

@@ -80,7 +80,7 @@ async function submitWithMap(postId: string, text: string, feud: Feud) {
     console.error('Could not attach the day\u2019s animation, trying a still map', error);
   }
   try {
-    const mediaUrl = await uploadPng(await feud.mapPng());
+    const mediaUrl = await uploadPng(await feud.archipelagoPng());
     return await reddit.submitComment({ id, richtext: markdownToRichtext(text, { mediaUrl, animated: false }), runAs: 'APP' });
   } catch (error) {
     console.error('Could not attach the map, posting the results without it', error);
@@ -101,8 +101,8 @@ function markdownToRichtext(text: string, map: { mediaUrl: string; animated: boo
   const items = rest.filter((l) => l.startsWith('- ')).map((l) => plainText(l.slice(2)));
   const after = rest.filter((l) => l.trim() && !l.startsWith('- '));
   const rt = new RichTextBuilder().heading({ level: 3 }, (h) => { h.rawText(plainText(head)); });
-  if (map.animated) rt.animatedImage({ mediaUrl: map.mediaUrl, caption: 'The day on the island, morning to midnight' });
-  else rt.image({ mediaUrl: map.mediaUrl, caption: 'The island at midnight' });
+  if (map.animated) rt.animatedImage({ mediaUrl: map.mediaUrl, caption: 'The day on the islands, morning to midnight' });
+  else rt.image({ mediaUrl: map.mediaUrl, caption: 'The islands at midnight' });
   if (items.length) rt.list({ ordered: false }, (list) => { items.forEach((item) => list.item((li) => { li.paragraph((p) => { p.text({ text: item }); }); })); });
   after.forEach((line) => rt.paragraph((p) => { p.text({ text: plainText(line) }); }));
   return rt;

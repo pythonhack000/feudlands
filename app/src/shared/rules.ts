@@ -34,7 +34,8 @@ export function cryPower(votes: number, bestRebuttalVotes: number): number {
 }
 
 export type BuildMove = { t: 'build'; kind: 'camp' | 'tower'; q: number; r: number };
-export type ChargeMove = { t: 'charge'; q: number; r: number; cry: { id: string; power: number } | null };
+/** A charge carries its cry's power and the fleets from neighbouring islands, both fixed when it was made. */
+export type ChargeMove = { t: 'charge'; q: number; r: number; cry: { id: string; power: number } | null; fleet?: number };
 /** A move by the demo crowd. Every client works out the same move from the seed and the board. */
 export type BotMove = { t: 'bot'; seed: number };
 export type NewMove = (BuildMove | ChargeMove | BotMove) & { by: string; side: Side | null };
@@ -47,6 +48,8 @@ export type State = {
   /** Tomorrow's ballot. */
   next: { choices: { id: string; question: string; votes: number; by: string | null }[]; mine: string | null; suggested: boolean };
   me: { name: string | null; side: Side | null; record: FighterRecord | null };
+  /** The archipelago: which island you fight on, which one you're looking at, and how every island stands. */
+  isles: { mine: number | null; viewing: number; stats: { a: number; b: number }[] };
   /** This week's generals so far, best first. */
   week: { n: number; top: WeekRow[] };
   moves: Move[];

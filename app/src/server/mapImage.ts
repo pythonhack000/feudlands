@@ -144,11 +144,31 @@ const FRAME = { w: 480, h: 400, delayMs: 450, lastDelayMs: 2500 } as const;
 
 /** Islands as a looping GIF, one frame each, holding on the last. */
 export function islandsGif(islands: Island[]): Buffer {
+  return framesGif(islands.map((cells) => [cells]), FRAME.w, FRAME.h);
+}
+
+/** The archipelago as a looping GIF: each frame is every island side by side at that point in the day. */
+export function archipelagoGif(frames: Island[][]): Buffer {
+  const count = frames[0]?.length ?? 1;
+  if (count === 1) return islandsGif(frames.map((f) => f[0]));
+  return framesGif(frames, TILE.w, TILE.h);
+}
+
+/** Frames of islands laid out like the week grid (four across), flat-painted for GIF's 256 colours. */
+function framesGif(frames: Island[][], tileW: number, tileH: number): Buffer {
+  const count = frames[0].length, single = count === 1;
+  const cols = Math.min(4, count), rows = Math.ceil(count / cols), gap = single ? 0 : TILE.gap;
+  const width = cols * tileW + (cols + 1) * gap, height = rows * tileH + (rows + 1) * gap;
   const palette = new Map<number, number>();
-  const indexed = islands.map((cells) => {
-    const rgb = Buffer.alloc(FRAME.w * FRAME.h * 3);
-    paintIsland(cells, rgb, FRAME.w, { x: 0, y: 0, w: FRAME.w, h: FRAME.h }, true);
-    const idx = new Uint8Array(FRAME.w * FRAME.h);
+  const indexed = frames.map((isles) => {
+    const rgb = Buffer.alloc(width * height * 3);
+    for (let i = 0; i < rgb.length; i += 3) { rgb[i] = PAPER[0]; rgb[i + 1] = PAPER[1]; rgb[i + 2] = PAPER[2]; }
+    isles.forEach((cells, i) => {
+      const row = Math.floor(i / cols), inRow = row === rows - 1 ? count - row * cols : cols;
+      const offset = ((cols - inRow) * (tileW + gap)) / 2;
+      paintIsland(cells, rgb, width, { x: Math.round(gap + offset + (i % cols) * (tileW + gap)), y: gap + row * (tileH + gap), w: tileW, h: tileH }, true);
+    });
+    const idx = new Uint8Array(width * height);
     for (let i = 0; i < idx.length; i++) {
       const key = (rgb[i * 3] << 16) | (rgb[i * 3 + 1] << 8) | rgb[i * 3 + 2];
       let at = palette.get(key);
@@ -160,7 +180,7 @@ export function islandsGif(islands: Island[]): Buffer {
     }
     return idx;
   });
-  return encodeGif(FRAME.w, FRAME.h, [...palette.keys()], indexed, (i) => (i === indexed.length - 1 ? FRAME.lastDelayMs : FRAME.delayMs));
+  return encodeGif(width, height, [...palette.keys()], indexed, (i) => (i === indexed.length - 1 ? FRAME.lastDelayMs : FRAME.delayMs));
 }
 
 function nearest(palette: Map<number, number>, key: number): number {

@@ -97,7 +97,7 @@ test('the crowd moves once per tick however many people watch, and stops for the
 });
 
 import { resultsComment } from '../src/server/feud.ts';
-import { isFree, makeIsland, tallyDay, wouldCapture } from '../src/shared/island.ts';
+import { canCharge, isFree, makeIsland, tallyDay, wouldCapture } from '../src/shared/island.ts';
 import { LEGACY_DAY as FEUD_DAY } from '../src/shared/rules.ts';
 
 
@@ -377,7 +377,69 @@ test('the day becomes a GIF, from the morning to the last move', async () => {
   for (let i = 0; i < 30; i++) await new Feud(store, 'p', null, T0 + i * BOT_TICK_MS).state(0);
   const gif = await new Feud(store, 'p', null, T0).dayGif();
   assert.equal(gif.subarray(0, 6).toString('ascii'), 'GIF89a');
-  assert.equal(gif.readUInt16LE(6), 480); assert.equal(gif.readUInt16LE(8), 400);
+  assert.equal(gif.readUInt16LE(6), 3 * 320 + 4 * 12); assert.equal(gif.readUInt16LE(8), 267 + 2 * 12); // three islands side by side
   assert.equal(gif.at(-1), 0x3b);
   assert.equal(gif.toString('latin1').split('\x21\xf9\x04').length - 1, 12); // twelve frames
+});
+
+
+import { fleetBonus, isleSeed, islesFor, MIN_ISLES, REGIMENT } from '../src/shared/archipelago.ts';
+
+test('the archipelago starts at three islands and grows with the crowd', () => {
+  assert.equal(islesFor(0), MIN_ISLES);
+  assert.equal(islesFor(REGIMENT * 5), 5);
+  assert.equal(islesFor(1_000_000), 12);
+  assert.notDeepEqual(
+    [...makeIsland(isleSeed(12, 1)).values()].map((c) => c.land).join(),
+    [...makeIsland(isleSeed(12, 2)).values()].map((c) => c.land).join(),
+  ); // every island has its own coast
+});
+
+test('fighters are spread where their side is thinnest, and fight only on their own island', async () => {
+  const store = memoryStore();
+  const names = ['a1', 'a2', 'a3', 'b1'];
+  for (const n of names) await new Feud(store, 'p', n, T0).chooseSide(n.startsWith('a') ? 'a' : 'b');
+  const mine = await Promise.all(names.map(async (n) => (await new Feud(store, 'p', n, T0).state(0)).isles.mine));
+  assert.deepEqual(mine.slice(0, 3).sort(), [0, 1, 2]); // three cats, three islands
+  const a2 = new Feud(store, 'p', 'a2', T0), island = makeIsland(isleSeed(12, mine[1]!));
+  const free = [...island.values()].find(isFree)!;
+  await a2.build('camp', free.q, free.r);
+  const onTheirs = await new Feud(store, 'p', 'a2', T0, mine[1]).state(0);
+  assert.ok(onTheirs.moves.some((m) => m.t === 'build' && m.by === 'a2'));
+  const elsewhere = await new Feud(store, 'p', 'a2', T0, (mine[1]! + 1) % 3).state(0);
+  assert.ok(!elsewhere.moves.some((m) => m.by === 'a2'));
+});
+
+test('a charge brings fleets from the neighbouring islands its side holds', async () => {
+  assert.equal(fleetBonus([{ a: 50, b: 10 }, { a: 5, b: 5 }, { a: 40, b: 20 }], 1, 'a'), 2);
+  assert.equal(fleetBonus([{ a: 50, b: 10 }, { a: 5, b: 5 }, { a: 10, b: 40 }], 1, 'a'), 1);
+  assert.equal(fleetBonus([{ a: 50, b: 10 }, { a: 5, b: 5 }, { a: 40, b: 20 }], 0, 'b'), 0);
+  const store = memoryStore(), ann = new Feud(store, 'p', 'ann', T0);
+  await ann.chooseSide('a');
+  const st = await ann.state(0), isle = st.isles.mine!;
+  const expected = fleetBonus(st.isles.stats, isle, 'a');
+  const island = makeIsland(isleSeed(12, isle));
+  const target = [...island.values()].find((c) => canCharge(island, c, 'a')) ?? [...island.values()].find((c) => c.land)!;
+  await ann.charge(target.q, target.r, null);
+  const charge = (await new Feud(store, 'p', 'ann', T0, isle).state(0)).moves.find((m) => m.t === 'charge');
+  assert.ok(charge && charge.t === 'charge');
+  assert.equal(charge.fleet, expected);
+});
+
+test('the day adds up every island, and names who holds each', async () => {
+  const store = memoryStore();
+  for (let i = 0; i < 3; i++) await new Feud(store, 'p', null, T0 + i * BOT_TICK_MS, i).state(0);
+  const r = await new Feud(store, 'p', null, T0).results();
+  assert.equal(r.isles!.length, 3);
+  assert.equal(r.a, r.isles!.reduce((n, x) => n + x.a, 0));
+  assert.match(resultsComment(r), /- The islands: Ash .*, Brine .*, Cinder /);
+});
+
+test('a post from before the archipelago keeps its moves on island 0', async () => {
+  const store = memoryStore();
+  await store.hSet('feud:old:sides', { ann: 'a' }); // sworn in before islands existed
+  await store.zAdd('feud:old:moves', { member: JSON.stringify({ t: 'bot', seed: 1, by: 'crowd', side: null, seq: 1, at: 0 }), score: 1 });
+  const st = await new Feud(store, 'old', 'ann', T0).state(0);
+  assert.equal(st.isles.mine, 0); assert.equal(st.isles.viewing, 0);
+  assert.ok(st.moves.some((m) => m.seq === 1));
 });

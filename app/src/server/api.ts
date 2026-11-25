@@ -24,7 +24,8 @@ export function api(deps: ApiDeps): Hono {
       const post = deps.postId();
       if (!post) throw new FeudError('Open the feud from its post', 404);
       const body = c.req.method === 'POST' ? await readBody(c) : {};
-      const feud = new Feud(deps.store, post, await deps.username(c));
+      const isle = Number.parseInt(c.req.query('isle') ?? '', 10);
+      const feud = new Feud(deps.store, post, await deps.username(c), Date.now(), Number.isInteger(isle) && isle >= 0 ? isle : null);
       return c.json<Envelope<T>>({ ok: true, data: await work(feud, body, c, post) });
     } catch (error) {
       if (error instanceof FeudError) return c.json<Envelope<T>>({ ok: false, error: error.message }, error.status);

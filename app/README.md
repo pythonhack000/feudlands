@@ -10,7 +10,8 @@ Built with [Devvit Web](https://developers.reddit.com/) for Reddit's Game of the
 Open the demo post, press **Join the war**, and pick a side. The first few moves teach you: camps first, then surrounding, then charges, then the war council. **Skip training** opens everything at once. **Replay** plays the whole day again on the map.
 
 ## How it plays
-- Pick a side for the day's feud.
+- Pick a side for the day's feud. You're sent to one island of the day's archipelago: three to start, more as more people join.
+- Hold an island and your side's fleet adds 1 to every charge on the islands beside it.
 - Place camps on free hexes. Surround an enemy camp on every side and it turns to yours. Towers can't be boxed in.
 - Charge an enemy hex beside your land. Attack is 1, plus your land around it, plus your battle cry. Defence is the piece, plus their land around it, plus 1 for holding it.
 - Argue in the war council. Every 20 upvotes make an argument 1 stronger as a battle cry; the best rebuttal takes its score off.

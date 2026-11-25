@@ -1,7 +1,8 @@
 // The shared war: one island per post, stored as an ordered log of moves.
 // Every client replays the same log onto the same seeded island, so everyone sees the same map.
 import { dayFrames, isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
-import { islandPng, islandsGif, weekGridPng } from './mapImage.ts';
+import { archipelagoGif, islandPng, weekGridPng } from './mapImage.ts';
+import { fleetBonus, ISLE_NAMES, isleSeed, islesFor, type IsleStat } from '../shared/archipelago.ts';
 import type { Island } from '../shared/island.ts';
 import {
   cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX, WEEK_DAYS, weekOf,
@@ -31,6 +32,8 @@ export interface Results {
   general: { name: string; hexes: number } | null;
   cry: { text: string; by: string; side: Side; hexes: number } | null;
   hexes: Record<string, number>;
+  /** Each island's hexes at the end of the day. */
+  isles?: { name: string; a: number; b: number }[];
 }
 
 const hexes = (n: number) => `${n} ${n === 1 ? 'hex' : 'hexes'}`;
@@ -47,6 +50,7 @@ export function resultsComment(r: Results, tomorrow: { question: string; by?: st
     last ? `- Rematch: last time, on day ${last.day}, ${last.a === last.b ? 'it ended split' : `the ${sides[last.a > last.b ? 'a' : 'b'].toLowerCase()} won, ${pct(Math.max(last.a, last.b), last.a + last.b)}% to ${100 - pct(Math.max(last.a, last.b), last.a + last.b)}%`}` : null,
     r.general ? `- General of the day: u/${r.general.name}, ${hexes(r.general.hexes)} taken` : null,
     r.cry ? `- Cry of the day: \u201c${r.cry.text}\u201d by u/${r.cry.by}${r.cry.hexes ? `, took ${hexes(r.cry.hexes)}` : ''}` : null,
+    r.isles && r.isles.length > 1 ? `- The islands: ${r.isles.map((x) => `${x.name} ${x.a === x.b ? 'split' : `to the ${sides[x.a > x.b ? 'a' : 'b'].toLowerCase()}`}`).join(', ')}` : null,
     `- Sworn in: ${r.sworn.a} for the ${sides.a.toLowerCase()}, ${r.sworn.b} for the ${sides.b.toLowerCase()}`,
   ].filter(Boolean);
   const next = tomorrow ? ['', `Tomorrow's feud, picked by the council: **${tomorrow.question}**${tomorrow.by ? `, suggested by u/${tomorrow.by}` : ''}`] : [];
@@ -199,7 +203,12 @@ const keys = (post: string) => {
   return {
     meta: k('meta'), seq: k('seq'), moves: k('moves'), sides: k('sides'), seen: k('seen'),
     args: k('args'), votes: k('votes'), shared: k('shared'), next: k('next'), nextMine: k('nextmine'),
-    proposals: k('proposals'), proposedBy: k('proposedby'), botSlots: k('botslots'), botCount: k('botcount'),
+    proposals: k('proposals'), proposedBy: k('proposedby'),
+    isleOf: k('isleof'), isleSworn: k('islesworn'), isleStats: k('islestats'),
+    // Island 0 keeps the original key names, so posts from before the archipelago carry on.
+    movesOf: (isle: number) => (isle === 0 ? k('moves') : k(`moves:${isle}`)),
+    botSlotsOf: (isle: number) => (isle === 0 ? k('botslots') : k(`botslots:${isle}`)),
+    botCountOf: (isle: number) => (isle === 0 ? k('botcount') : k(`botcount:${isle}`)), botSlots: k('botslots'), botCount: k('botcount'),
     used: (user: string) => k(`used:${user}`), myVotes: (user: string) => k(`uv:${user}`),
   };
 };
@@ -211,8 +220,10 @@ export class Feud {
   private readonly user: string | null;
   private readonly now: number;
   private readonly post: string;
-  constructor(store: Store, post: string, user: string | null, now = Date.now()) {
-    this.store = store; this.user = user; this.now = now; this.post = post; this.k = keys(post);
+  /** The island asked for; null means the fighter's own, or the first. */
+  private readonly view: number | null;
+  constructor(store: Store, post: string, user: string | null, now = Date.now(), view: number | null = null) {
+    this.store = store; this.user = user; this.now = now; this.post = post; this.k = keys(post); this.view = view;
   }
 
   /** Sets up a brand-new feud post with its topic and day, before anyone opens it. */
@@ -304,19 +315,21 @@ export class Feud {
   /** Everything after `after` in the log, plus the council and who you are. */
   async state(after: number): Promise<State> {
     await this.seed();
-    await this.tickBots();
+    const isles = await this.isles();
+    const viewing = this.view !== null && this.view >= 0 && this.view < isles.count ? this.view : isles.mine ?? 0;
+    await this.tickBots(viewing);
     if (this.user) await this.store.zAdd(this.k.seen, { member: this.user, score: this.now });
     const day = (await this.info()).day;
     const [feud, next, record, moves, args, myVotes, sides, here, botCount, top] = await Promise.all([
       this.info(),
       this.next(),
       this.user ? recordOf(this.store, this.user) : Promise.resolve(null),
-      this.store.zRange(this.k.moves, after + 1, LAST_SEQ, { by: 'score' }),
+      this.store.zRange(this.k.movesOf(viewing), after + 1, LAST_SEQ, { by: 'score' }),
       this.args(),
       this.user ? this.store.hGetAll(this.k.myVotes(this.user)) : Promise.resolve({}),
       this.store.hGetAll(this.k.sides),
       this.store.zRange(this.k.seen, this.now - HERE_WINDOW_MS, this.now, { by: 'score' }),
-      this.store.get(this.k.botCount),
+      this.store.get(this.k.botCountOf(viewing)),
       weekBoard(this.store, weekOf(day), 5),
     ]);
     const side = this.user ? sides[this.user] : undefined;
@@ -324,6 +337,7 @@ export class Feud {
     Object.values(sides).forEach((s) => { if (isSide(s)) sworn[s]++; });
     return {
       feud, next,
+      isles: { mine: isles.mine, viewing, stats: await this.isleStats(isles.count) },
       week: { n: weekOf(day), top },
       me: { name: this.user, side: isSide(side) ? side : null, record },
       sworn,
@@ -340,6 +354,7 @@ export class Feud {
     const user = this.fighter();
     if (!isSide(side)) throw new FeudError('Pick a side');
     if (!(await this.store.hSetNX(this.k.sides, user, side))) return null;
+    await this.assignIsle(user, side);
     const { day } = await this.info(), before = await recordOf(this.store, user);
     if (before && before.lastDay === day) return null;
     const streak = before && before.lastDay === day - 1 ? before.streak + 1 : 1;
@@ -356,21 +371,35 @@ export class Feud {
     for (const name of winners) await this.store.hIncrBy(k.wins, name, 1);
   }
 
-  /** The island at the end of the log. */
-  async island(): Promise<Island> {
-    const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
-    return tallyDay(day, moves.map((m) => JSON.parse(m.member) as Move)).cells;
+  /** An island's log, in order. */
+  private async movesOf(isle: number): Promise<Move[]> {
+    return (await this.store.zRange(this.k.movesOf(isle), 0, LAST_SEQ, { by: 'score' })).map((m) => JSON.parse(m.member) as Move);
   }
 
-  /** The whole day as a looping GIF: the island from the morning to the last move. */
+  /** An island as it stands at the end of its log (the fighter's own, or the first). */
+  async island(isle?: number): Promise<Island> {
+    const at = isle ?? (await this.isles()).mine ?? 0, { day } = await this.info();
+    return tallyDay(isleSeed(day, at), await this.movesOf(at)).cells;
+  }
+
+  /** The whole day as a looping GIF: every island from the morning to its last move, side by side. */
   async dayGif(): Promise<Buffer> {
-    const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
-    return islandsGif(dayFrames(day, moves.map((m) => JSON.parse(m.member) as Move), DAY_GIF_FRAMES));
+    const { count } = await this.isles(), { day } = await this.info();
+    const perIsle = await Promise.all(Array.from({ length: count }, async (_, i) => dayFrames(isleSeed(day, i), await this.movesOf(i), DAY_GIF_FRAMES)));
+    const length = Math.max(...perIsle.map((f) => f.length));
+    const frames = Array.from({ length }, (_, j) => perIsle.map((f) => f[Math.min(j, f.length - 1)]));
+    return archipelagoGif(frames);
   }
 
-  /** The island at the end of the log, as a PNG. */
+  /** The fighter's island as it stands now, as a PNG. */
   async mapPng(): Promise<Buffer> {
     return islandPng(await this.island());
+  }
+
+  /** Every island at the end of the day, side by side. */
+  async archipelagoPng(): Promise<Buffer> {
+    const { count } = await this.isles();
+    return weekGridPng(await Promise.all(Array.from({ length: count }, (_, i) => this.island(i))));
   }
 
   /** Files today's result under its topic, so the next time it comes round it's a rematch. */
@@ -398,7 +427,7 @@ export class Feud {
     if (kind !== 'camp' && kind !== 'tower') throw new FeudError('Unknown piece');
     const at = hexOf(q, r);
     await this.spend(user, 'build');
-    await this.append({ t: 'build', kind, ...at, by: user, side });
+    await this.append({ t: 'build', kind, ...at, by: user, side }, await this.myIsle(user));
   }
 
   async charge(q: unknown, r: unknown, cryId: unknown): Promise<void> {
@@ -412,8 +441,10 @@ export class Feud {
       const rebuttal = Math.max(0, ...args.filter((a) => a.parent === chosen.id).map((a) => a.votes));
       cry = { id: chosen.id, power: cryPower(chosen.votes, rebuttal) };
     }
+    const isle = await this.myIsle(user), { count } = await this.isles();
+    const fleet = fleetBonus(await this.isleStats(count), isle, side);
     await this.spend(user, 'charge');
-    await this.append({ t: 'charge', ...at, cry, by: user, side });
+    await this.append({ t: 'charge', ...at, cry, fleet, by: user, side }, isle);
   }
 
   /** A new argument, or a rebuttal when `parent` names the other side's argument. */
@@ -449,13 +480,14 @@ export class Feud {
 
   /** The day so far, counted from the whole log: what the midnight comment says. */
   async results(): Promise<Results> {
-    const [feud, moves, args, sides] = await Promise.all([
-      this.info(),
-      this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' }),
-      this.args(),
-      this.store.hGetAll(this.k.sides),
-    ]);
-    const day = tallyDay(feud.day, moves.map((m) => JSON.parse(m.member) as Move));
+    const [feud, { count }, args, sides] = await Promise.all([this.info(), this.isles(), this.args(), this.store.hGetAll(this.k.sides)]);
+    const tallies = await Promise.all(Array.from({ length: count }, async (_, i) => tallyDay(isleSeed(feud.day, i), await this.movesOf(i))));
+    const day = { a: 0, b: 0, hexes: {} as Record<string, number>, cries: {} as Record<string, number> };
+    for (const t of tallies) {
+      day.a += t.a; day.b += t.b;
+      for (const [n, v] of Object.entries(t.hexes)) day.hexes[n] = (day.hexes[n] ?? 0) + v;
+      for (const [n, v] of Object.entries(t.cries)) day.cries[n] = (day.cries[n] ?? 0) + v;
+    }
     const players = Object.entries(day.hexes).filter(([name, n]) => !isCrowd(name) && n > 0).sort((x, y) => y[1] - x[1]);
     const said = args.filter((a) => a.parent === null && !isCrowd(a.by));
     const best = said.map((a) => ({ a, hexes: day.cries[a.id] ?? 0 })).sort((x, y) => y.hexes - x.hexes || y.a.votes - x.a.votes)[0];
@@ -466,6 +498,7 @@ export class Feud {
       general: players[0] ? { name: players[0][0], hexes: players[0][1] } : null,
       cry: best ? { text: best.a.text, by: best.a.by, side: best.a.side, hexes: best.hexes } : null,
       hexes: day.hexes,
+      isles: tallies.map((t, i) => ({ name: ISLE_NAMES[i], a: t.a, b: t.b })),
     };
   }
 
@@ -507,9 +540,48 @@ export class Feud {
     }
   }
 
-  private async append(move: NewMove): Promise<void> {
+  private async append(move: NewMove, isle: number): Promise<void> {
     const seq = await this.store.incrBy(this.k.seq, 1);
-    await this.store.zAdd(this.k.moves, { member: JSON.stringify({ ...move, seq, at: this.now }), score: seq });
+    await this.store.zAdd(this.k.movesOf(isle), { member: JSON.stringify({ ...move, seq, at: this.now }), score: seq });
+    // Keep the island's standing current, so fleets and the archipelago bar never replay whole logs.
+    const { day } = await this.info(), t = tallyDay(isleSeed(day, isle), await this.movesOf(isle));
+    await this.store.hSet(this.k.isleStats, { [String(isle)]: JSON.stringify({ a: t.a, b: t.b }) });
+  }
+
+  /** How many islands are open, and which one is yours. */
+  private async isles(): Promise<{ count: number; mine: number | null }> {
+    const [sides, mine] = await Promise.all([
+      this.store.hGetAll(this.k.sides),
+      this.user ? this.store.hGet(this.k.isleOf, this.user) : Promise.resolve(undefined),
+    ]);
+    const sworn = Object.keys(sides).length;
+    const own = mine !== undefined ? Number(mine) : this.user && sides[this.user] ? 0 : null; // sworn before the archipelago: island 0
+    return { count: Math.max(islesFor(sworn), own === null ? 0 : own + 1), mine: own };
+  }
+
+  private async myIsle(user: string): Promise<number> {
+    const isle = await this.store.hGet(this.k.isleOf, user);
+    return isle === undefined ? 0 : Number(isle);
+  }
+
+  /** Every island's standing: hexes held by each side. Islands nobody has touched stand at their morning. */
+  private async isleStats(count: number): Promise<IsleStat[]> {
+    const [rows, { day }] = await Promise.all([this.store.hGetAll(this.k.isleStats), this.info()]);
+    return Array.from({ length: count }, (_, i) => {
+      if (rows[String(i)]) return JSON.parse(rows[String(i)]) as IsleStat;
+      const morning = tallyDay(isleSeed(day, i), []);
+      return { a: morning.a, b: morning.b };
+    });
+  }
+
+  /** A new fighter goes where their side is thinnest, so every island has a fight. */
+  private async assignIsle(user: string, side: Side): Promise<void> {
+    const { count } = await this.isles(), counts = await this.store.hGetAll(this.k.isleSworn);
+    const mine = (i: number) => Number(counts[`${i}:${side}`] ?? 0), theirs = (i: number) => Number(counts[`${i}:${side === 'a' ? 'b' : 'a'}`] ?? 0);
+    let best = 0;
+    for (let i = 1; i < count; i++) if (mine(i) - theirs(i) < mine(best) - theirs(best) || (mine(i) - theirs(i) === mine(best) - theirs(best) && mine(i) < mine(best))) best = i;
+    await this.store.hSet(this.k.isleOf, { [user]: String(best) });
+    await this.store.hIncrBy(this.k.isleSworn, `${best}:${side}`, 1);
   }
 
   private async args(): Promise<Argument[]> {
@@ -535,13 +607,13 @@ export class Feud {
   }
 
   // Whoever claims this tick's slot first makes the crowd's move, so two viewers never double it.
-  private async tickBots(): Promise<void> {
-    if (Number((await this.store.get(this.k.botCount)) ?? 0) >= BOT_MOVES_PER_DAY) return;
+  private async tickBots(isle: number): Promise<void> {
+    if (Number((await this.store.get(this.k.botCountOf(isle))) ?? 0) >= BOT_MOVES_PER_DAY) return;
     const slot = Math.floor(this.now / BOT_TICK_MS);
-    if (!(await this.store.hSetNX(this.k.botSlots, String(slot), '1'))) return;
-    await this.store.incrBy(this.k.botCount, 1);
-    const seed = (slot * 2654435761) >>> 0;
-    await this.append({ t: 'bot', seed, by: 'crowd', side: null });
+    if (!(await this.store.hSetNX(this.k.botSlotsOf(isle), String(slot), '1'))) return;
+    await this.store.incrBy(this.k.botCountOf(isle), 1);
+    const seed = ((slot + isle * 7919) * 2654435761) >>> 0;
+    await this.append({ t: 'bot', seed, by: 'crowd', side: null }, isle);
     if (seed % 100 < BOT_VOTE_CHANCE * 100) {
       const openers = (await resolveTopic(this.store, (await this.info()).topic)).openers.length;
       if (openers) await this.store.hIncrBy(this.k.votes, `s${1 + (seed % openers)}`, 1 + (seed % 3));
