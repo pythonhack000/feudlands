@@ -1012,4 +1012,4 @@ async function start() {
 sound.unlockOnFirstTap();
 document.fonts.ready.then(start);
 // Test hook: ?debug exposes the board so scripted playthroughs can find hexes.
-if (new URLSearchParams(location.search).has('debug')) window.feud = { I, cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; }, get seq() { return lastSeq; }, get points() { return myPoints; } };
+if (new URLSearchParams(location.search).has('debug')) window.feud = { I, sound, cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; }, get seq() { return lastSeq; }, get points() { return myPoints; } };
