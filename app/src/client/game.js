@@ -649,7 +649,8 @@ function joinSide(side) {
 }
 // The header only offers what you've unlocked.
 function showHeaderLinks() {
-  const links = [['openRules', 'How to play', openRules, true], ['openCouncil', 'War council', openCouncil, lesson >= 3], ['openGallery', 'Banners', openGallery, trained()], ['openEasel', 'Draw one', openEasel, trained()], ['openMidnight', 'Midnight', openMidnight, true], ['replayDay', 'Replay the day', replayDay, true]];
+  // Short labels, so every link fits on one line beside the map and on a phone.
+  const links = [['openRules', 'Rules', openRules, true], ['openCouncil', 'Council', openCouncil, lesson >= 3], ['openGallery', 'Banners', openGallery, trained()], ['openEasel', 'Draw', openEasel, trained()], ['openMidnight', 'Midnight', openMidnight, true], ['replayDay', 'Replay', replayDay, true]];
   const you = document.getElementById('you');
   you.innerHTML = '<span id="rank"></span>' + links.filter(([, , , open]) => open).map(([id, label]) => `<button type="button" id="${id}">${label}</button>`).join('');
   links.forEach(([id, , open]) => { const b = document.getElementById(id); if (b) b.onclick = open; });
