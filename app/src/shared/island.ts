@@ -170,3 +170,17 @@ export function tallyDay(day: number, moves: Move[]): DayTally {
   for (const c of cells.values()) { if (c.side === 'a') a++; if (c.side === 'b') b++; }
   return { a, b, hexes, cries, cells };
 }
+
+/** The island at evenly spaced points through the day, from the morning to the last move. */
+export function dayFrames(day: number, moves: Move[], frames: number): Island[] {
+  const sorted = [...moves].sort((x, y) => x.seq - y.seq), cells = makeIsland(day), out: Island[] = [];
+  const copy = (): Island => new Map([...cells].map(([k, c]) => [k, { ...c }]));
+  out.push(copy());
+  // Frame j shows the island after round(j * n / (frames - 1)) moves, so the day is spread evenly.
+  const cuts = new Set(Array.from({ length: Math.max(0, frames - 1) }, (_, j) => Math.round(((j + 1) * sorted.length) / (frames - 1))));
+  sorted.forEach((m, i) => {
+    play(cells, m);
+    if (cuts.has(i + 1)) out.push(copy());
+  });
+  return out;
+}

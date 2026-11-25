@@ -451,8 +451,10 @@ async function api(path, body) {
 }
 const after = () => `after=${lastSeq}`;
 // One move from the log. Returns the points it scored, or null if the board had already moved on.
+const dayLog = []; // every move so far today, for the replay
 function applyMove(m) {
   lastSeq = Math.max(lastSeq, m.seq);
+  dayLog.push(m);
   if (m.t === 'bot') { crowdMove(m.seed); return 0; }
   const c = cell(m.q, m.r), by = m.by === myName ? 'you' : m.by;
   if (m.t === 'build') {
@@ -503,6 +505,36 @@ async function submit(path, body) {
     busy = false;
   }
 }
+// ---------- replay the day: the whole log again on the map, from the morning, then back to now ----------
+const REPLAY_MS = 9000, REPLAY_STEP_MAX_MS = 220;
+let replayingDay = false;
+const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+async function replayDay() {
+  if (replayingDay || busy) return;
+  replayingDay = true; busy = true; hover = null; picked = null; battles.length = 0;
+  document.querySelector('.sheet')?.remove();
+  const now = [...cells.values()].map((c) => ({ c, side: c.side, kind: c.kind, by: c.by }));
+  const morning = I.makeIsland(TODAY);
+  for (const [k, c] of cells) Object.assign(c, { side: morning.get(k).side, kind: morning.get(k).kind, by: morning.get(k).by, bornAt: undefined, flipAt: undefined, label: null });
+  tally(); draw();
+  const moves = [...dayLog].sort((x, y) => x.seq - y.seq), step = Math.min(REPLAY_STEP_MAX_MS, REPLAY_MS / Math.max(1, moves.length));
+  try {
+    for (let i = 0; i < moves.length; i++) {
+      const o = I.play(cells, moves[i]), t = performance.now();
+      if (o) { o.c.bornAt = t; o.flipped.forEach((f) => { f.flipAt = t; }); }
+      statusEl.textContent = `Replaying the day: move ${i + 1} of ${moves.length}`;
+      tally(); draw();
+      await pause(step);
+    }
+    await pause(900);
+  } finally {
+    now.forEach(({ c, side, kind, by }) => Object.assign(c, { side, kind, by, bornAt: undefined, flipAt: undefined, label: null }));
+    replayingDay = false; busy = false;
+    tally(); renderCards(); draw();
+    statusEl.textContent = moves.length ? 'That was the day so far. Your move.' : 'Nothing has happened yet today. Make the first move.';
+  }
+}
+
 async function poll() {
   if (!document.hidden && !busy) {
     try { applyState(await api(`state?${after()}`)); }
@@ -617,7 +649,7 @@ function joinSide(side) {
 }
 // The header only offers what you've unlocked.
 function showHeaderLinks() {
-  const links = [['openRules', 'How to play', openRules, true], ['openCouncil', 'War council', openCouncil, lesson >= 3], ['openGallery', 'Banners', openGallery, trained()], ['openEasel', 'Draw one', openEasel, trained()], ['openMidnight', 'Midnight', openMidnight, true]];
+  const links = [['openRules', 'How to play', openRules, true], ['openCouncil', 'War council', openCouncil, lesson >= 3], ['openGallery', 'Banners', openGallery, trained()], ['openEasel', 'Draw one', openEasel, trained()], ['openMidnight', 'Midnight', openMidnight, true], ['replayDay', 'Replay the day', replayDay, true]];
   const you = document.getElementById('you');
   you.innerHTML = '<span id="rank"></span>' + links.filter(([, , , open]) => open).map(([id, label]) => `<button type="button" id="${id}">${label}</button>`).join('');
   links.forEach(([id, , open]) => { const b = document.getElementById(id); if (b) b.onclick = open; });
@@ -797,7 +829,7 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerleave', () => { hover = null; tip.style.display = 'none'; draw(); });
 canvas.addEventListener('pointerdown', async (e) => {
   const p = pointer(e), c = hexAt(p.x, p.y), kind = pickedKind();
-  if (!kind || !mySide) return;
+  if (!kind || !mySide || replayingDay) return;
   if (kind === 'charge') {
     if (!canCharge(c, mySide)) { statusEl.textContent = 'Charge an enemy hex that touches your land.'; return; }
     if (lesson < 3) { plainCharge(c); return; }
@@ -925,6 +957,7 @@ function openMidnight() {
     <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${genStat.today ? `${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken` : 'Nobody yet. Take one hex and it\u2019s you.'}</small></div></div>
     <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
     <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share with the map</button><span role="status"></span></p>` : ''}</div></div>
+    <p><button type="button" class="vote replay">Replay the day</button> <small>Watch the whole day again on the map, from the morning.</small></p>
     <h2>Week ${week.n}</h2>
     <p>Hexes taken by real fighters this week. After seven feuds the leader becomes General of the week, in their flair.</p>
     ${week.top.length ? `<ol class="week">${week.top.map((r) => `<li${r.name === myName ? ' class="me"' : ''}><span>${r.name === myName ? 'You' : 'u/' + esc(r.name)}</span><small>${r.hexes} ${r.hexes === 1 ? 'hex' : 'hexes'}, ${r.wins} ${r.wins === 1 ? 'win' : 'wins'}</small></li>`).join('')}</ol>` : '<p><em>Nobody has taken a hex this week yet. The first one leads.</em></p>'}
@@ -932,6 +965,7 @@ function openMidnight() {
     <p>Vote for what the island fights over tomorrow. The winner goes up as a new post at midnight.</p>
     <div class="ballot"></div><p class="councilNote" role="status"></p>
     <div class="suggest"></div>`);
+  el.querySelector('.replay').onclick = replayDay;
   renderBallot(el.querySelector('.ballot'));
   renderSuggest(el.querySelector('.suggest'), el.querySelector('.ballot'));
   const brag = el.querySelector('.brag');

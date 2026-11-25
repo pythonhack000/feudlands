@@ -1,7 +1,7 @@
 // The shared war: one island per post, stored as an ordered log of moves.
 // Every client replays the same log onto the same seeded island, so everyone sees the same map.
-import { isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
-import { islandPng, weekGridPng } from './mapImage.ts';
+import { dayFrames, isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
+import { islandPng, islandsGif, weekGridPng } from './mapImage.ts';
 import type { Island } from '../shared/island.ts';
 import {
   cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX, WEEK_DAYS, weekOf,
@@ -79,6 +79,8 @@ const BOT_VOTE_CHANCE = 0.6;
 const LIMITS = { build: 6, charge: 8, args: 12 } as const;
 const HERE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_SUGGESTIONS_SHOWN = 5;
+/** Frames in the day's animation, morning included. */
+const DAY_GIF_FRAMES = 12;
 /** An author's opening argument starts with their own vote. */
 const OPENER_VOTES = 1;
 const LAST_SEQ = Number.MAX_SAFE_INTEGER;
@@ -358,6 +360,12 @@ export class Feud {
   async island(): Promise<Island> {
     const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
     return tallyDay(day, moves.map((m) => JSON.parse(m.member) as Move)).cells;
+  }
+
+  /** The whole day as a looping GIF: the island from the morning to the last move. */
+  async dayGif(): Promise<Buffer> {
+    const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
+    return islandsGif(dayFrames(day, moves.map((m) => JSON.parse(m.member) as Move), DAY_GIF_FRAMES));
   }
 
   /** The island at the end of the log, as a PNG. */

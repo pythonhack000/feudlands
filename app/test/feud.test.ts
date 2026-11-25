@@ -371,3 +371,13 @@ test('Share posts the line with the island\'s picture, as the player', async () 
   assert.match(posted[0].text, /for the dogs\. Feudlands, day 12$/);
   assert.deepEqual([...posted[0].map!.subarray(1, 4)], [0x50, 0x4e, 0x47]); // P N G
 });
+
+test('the day becomes a GIF, from the morning to the last move', async () => {
+  const store = memoryStore();
+  for (let i = 0; i < 30; i++) await new Feud(store, 'p', null, T0 + i * BOT_TICK_MS).state(0);
+  const gif = await new Feud(store, 'p', null, T0).dayGif();
+  assert.equal(gif.subarray(0, 6).toString('ascii'), 'GIF89a');
+  assert.equal(gif.readUInt16LE(6), 480); assert.equal(gif.readUInt16LE(8), 400);
+  assert.equal(gif.at(-1), 0x3b);
+  assert.equal(gif.toString('latin1').split('\x21\xf9\x04').length - 1, 12); // twelve frames
+});

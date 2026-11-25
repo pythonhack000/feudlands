@@ -67,12 +67,21 @@ async function closeDay(postId: string, tomorrow: Topic | null): Promise<boolean
   return true;
 }
 
-/** The results comment with the island drawn under it. If the picture fails, the words still go up. */
+/**
+ * The results comment with the day replayed as a GIF under the headline: the front moving from morning to midnight.
+ * If the animation fails it falls back to a still map, and then to the words alone.
+ */
 async function submitWithMap(postId: string, text: string, feud: Feud) {
   const id = postId as `t3_${string}`;
   try {
+    const { mediaUrl } = await media.upload({ url: `data:image/gif;base64,${(await feud.dayGif()).toString('base64')}`, type: 'gif' });
+    return await reddit.submitComment({ id, richtext: markdownToRichtext(text, { mediaUrl, animated: true }), runAs: 'APP' });
+  } catch (error) {
+    console.error('Could not attach the day\u2019s animation, trying a still map', error);
+  }
+  try {
     const mediaUrl = await uploadPng(await feud.mapPng());
-    return await reddit.submitComment({ id, richtext: markdownToRichtext(text, mediaUrl), runAs: 'APP' });
+    return await reddit.submitComment({ id, richtext: markdownToRichtext(text, { mediaUrl, animated: false }), runAs: 'APP' });
   } catch (error) {
     console.error('Could not attach the map, posting the results without it', error);
     return reddit.submitComment({ id, text, runAs: 'APP' });
@@ -86,13 +95,14 @@ async function uploadPng(png: Buffer): Promise<string> {
 }
 
 /** Turns the results Markdown (a bold headline, a list, a closing line) into rich text with the map after the headline. */
-function markdownToRichtext(text: string, mediaUrl: string): RichTextBuilder {
+function markdownToRichtext(text: string, map: { mediaUrl: string; animated: boolean }): RichTextBuilder {
   const plainText = (line: string) => line.replace(/\*\*/g, '');
   const [head, ...rest] = text.split('\n');
   const items = rest.filter((l) => l.startsWith('- ')).map((l) => plainText(l.slice(2)));
   const after = rest.filter((l) => l.trim() && !l.startsWith('- '));
   const rt = new RichTextBuilder().heading({ level: 3 }, (h) => { h.rawText(plainText(head)); });
-  rt.image({ mediaUrl, caption: 'The island at midnight' });
+  if (map.animated) rt.animatedImage({ mediaUrl: map.mediaUrl, caption: 'The day on the island, morning to midnight' });
+  else rt.image({ mediaUrl: map.mediaUrl, caption: 'The island at midnight' });
   if (items.length) rt.list({ ordered: false }, (list) => { items.forEach((item) => list.item((li) => { li.paragraph((p) => { p.text({ text: item }); }); })); });
   after.forEach((line) => rt.paragraph((p) => { p.text({ text: plainText(line) }); }));
   return rt;
