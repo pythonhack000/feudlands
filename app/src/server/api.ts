@@ -8,8 +8,8 @@ export interface ApiDeps {
   postId(): string | undefined;
   /** Who is asking. Devvit knows from its own context; the local war reads a cookie. */
   username(c: Context): Promise<string | null>;
-  /** Posts a comment under the feud as the player who asked. */
-  commentAsUser(postId: string, text: string): Promise<void>;
+  /** Posts a comment under the feud as the player who asked, with the island's picture when there is one. */
+  commentAsUser(postId: string, text: string, map?: Buffer): Promise<void>;
   /** Puts a fighter's record in their subreddit flair. */
   setFlair(username: string, record: FighterRecord): Promise<void>;
   /** Whether this user moderates the subreddit. */
@@ -60,7 +60,7 @@ export function api(deps: ApiDeps): Hono {
   app.post('/share', handle(async (feud, _body, _c, post) => {
     const text = await feud.shareLine();
     try {
-      await deps.commentAsUser(post, text);
+      await deps.commentAsUser(post, text, await feud.mapPng());
     } catch (error) {
       await feud.unshare();
       console.error('Share comment failed', error);

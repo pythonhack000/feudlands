@@ -5,10 +5,12 @@ import { DIRS, hash, type Cell, type Island } from '../shared/island.ts';
 import type { Side } from '../shared/rules.ts';
 
 const WIDTH = 720, HEIGHT = 600, SUPERSAMPLE = 2;
+const TILE = { w: 320, h: 267, gap: 12 } as const;
 type RGB = [number, number, number];
 const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
+const PAPER = hex('#efe3c8');
 const SEA = mix(hex('#efe3c8'), hex('#6f9a95'), 0.45);
 const LAND = hex('#e6d3a3');
 const INK = hex('#3a2a1c');
@@ -17,7 +19,32 @@ const TERRITORY = 0.32;
 /** How far out from a hex's centre (0 centre, about 0.5 at the edge) each kind of line starts. */
 const EDGE = { coast: 0.455, front: 0.465, grid: 0.48 } as const;
 
+/** One day's island as a PNG. */
 export function islandPng(cells: Island): Buffer {
+  const rgb = Buffer.alloc(WIDTH * HEIGHT * 3);
+  paintIsland(cells, rgb, WIDTH, { x: 0, y: 0, w: WIDTH, h: HEIGHT });
+  return encodePng(WIDTH, HEIGHT, rgb);
+}
+
+/** A week's islands side by side, in day order: four on top, the rest below. Gaps are paper. */
+export function weekGridPng(islands: Island[]): Buffer {
+  const cols = Math.min(4, islands.length), rows = Math.ceil(islands.length / cols);
+  const width = cols * TILE.w + (cols + 1) * TILE.gap, height = rows * TILE.h + (rows + 1) * TILE.gap;
+  const rgb = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < rgb.length; i += 3) { rgb[i] = PAPER[0]; rgb[i + 1] = PAPER[1]; rgb[i + 2] = PAPER[2]; }
+  islands.forEach((cells, i) => {
+    const row = Math.floor(i / cols), inRow = row === rows - 1 ? islands.length - row * cols : cols;
+    const offset = ((cols - inRow) * (TILE.w + TILE.gap)) / 2; // centre a shorter last row
+    const x = Math.round(TILE.gap + offset + (i % cols) * (TILE.w + TILE.gap)), y = TILE.gap + row * (TILE.h + TILE.gap);
+    paintIsland(cells, rgb, width, { x, y, w: TILE.w, h: TILE.h });
+  });
+  return encodePng(width, height, rgb);
+}
+
+type Box = { x: number; y: number; w: number; h: number };
+/** Paints an island into a box of an RGB buffer `stride` pixels wide. */
+function paintIsland(cells: Island, out: Buffer, stride: number, box: Box): void {
+  const WIDTH = box.w, HEIGHT = box.h; // the island fits its own box
   const land = [...cells.values()].filter((c) => c.land);
   const xs = land.map((c) => Math.sqrt(3) * (c.q + c.r / 2)), ys = land.map((c) => 1.5 * c.r);
   const minX = Math.min(...xs) - 1.2, maxX = Math.max(...xs) + 1.2, minY = Math.min(...ys) - 1.4, maxY = Math.max(...ys) + 1.3;
@@ -54,7 +81,6 @@ export function islandPng(cells: Island): Buffer {
     return grainy(rgb);
   };
 
-  const rgba = Buffer.alloc(WIDTH * HEIGHT * 3);
   const step = 1 / SUPERSAMPLE, samples = SUPERSAMPLE * SUPERSAMPLE;
   for (let py = 0; py < HEIGHT; py++) {
     for (let px = 0; px < WIDTH; px++) {
@@ -63,11 +89,10 @@ export function islandPng(cells: Island): Buffer {
         const [cr, cg, cb] = shade(px + (sx + 0.5) * step, py + (sy + 0.5) * step);
         r += cr; g += cg; b += cb;
       }
-      const i = (py * WIDTH + px) * 3;
-      rgba[i] = clamp(r / samples); rgba[i + 1] = clamp(g / samples); rgba[i + 2] = clamp(b / samples);
+      const i = ((box.y + py) * stride + box.x + px) * 3;
+      out[i] = clamp(r / samples); out[i + 1] = clamp(g / samples); out[i + 2] = clamp(b / samples);
     }
   }
-  return encodePng(WIDTH, HEIGHT, rgba);
 }
 
 /** The neighbouring hex across the nearest edge from a point inside hex (q, r). */

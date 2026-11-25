@@ -337,3 +337,37 @@ test('the server draws the island as a real PNG', async () => {
   const idat = png.indexOf('IDAT'), len = png.readUInt32BE(idat - 4);
   assert.equal(inflateSync(png.subarray(idat + 4, idat + 4 + len)).length, (720 * 3 + 1) * 600);
 });
+
+import { weekMapPng } from '../src/server/feud.ts';
+import { api } from '../src/server/api.ts';
+
+test('the week\'s islands become one picture, four across', async () => {
+  const store = memoryStore();
+  assert.equal(await weekMapPng(store, 2), null);
+  for (let d = 8; d <= 14; d++) {
+    await Feud.open(store, `d${d}`, 'cats-dogs', d);
+    const f = new Feud(store, `d${d}`, null, T0);
+    await f.addToWeek(await f.results(), []);
+  }
+  const png = (await weekMapPng(store, 2))!;
+  assert.equal(png.readUInt32BE(16), 4 * 320 + 5 * 12);
+  assert.equal(png.readUInt32BE(20), 2 * 267 + 3 * 12);
+});
+
+test('Share posts the line with the island\'s picture, as the player', async () => {
+  const store = memoryStore(), posted: { text: string; map?: Buffer }[] = [];
+  const app = api({
+    store, postId: () => 'p', username: async () => 'ann',
+    commentAsUser: async (_post, text, map) => { posted.push({ text, map }); },
+    setFlair: async () => {}, isModerator: async () => false,
+  });
+  const call = (path: string, body: unknown) => app.request(`/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  await call('side', { side: 'b' });
+  const island = makeIsland(FEUD_DAY), boxIn = [...island.values()].find((c) => isFree(c) && wouldCapture(island, c, 'b') > 0)!;
+  await call('build', { kind: 'camp', q: boxIn.q, r: boxIn.r });
+  const res = await call('share', {});
+  assert.equal(res.status, 200);
+  assert.equal(posted.length, 1);
+  assert.match(posted[0].text, /for the dogs\. Feudlands, day 12$/);
+  assert.deepEqual([...posted[0].map!.subarray(1, 4)], [0x50, 0x4e, 0x47]); // P N G
+});

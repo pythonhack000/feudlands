@@ -4,10 +4,10 @@ import { context, createServer, getServerPort, media, reddit, redis, RichTextBui
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
 import {
-  ballotNotice, creditMaker, crownGeneral, endsWeek, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment, weekBoard, weekPost,
+  ballotNotice, creditMaker, crownGeneral, endsWeek, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment, weekBoard, weekMapPng, weekPost,
 } from './feud.ts';
 import { DEFAULT_TOPIC, type Topic } from '../shared/topics.ts';
-import { weekOf, type FighterRecord } from '../shared/rules.ts';
+import { weekOf, type FighterRecord, type WeekRow } from '../shared/rules.ts';
 
 /** Feuds older than this have had their midnight. */
 const OPEN_FOR_MS = 36 * 60 * 60 * 1000;
@@ -71,13 +71,18 @@ async function closeDay(postId: string, tomorrow: Topic | null): Promise<boolean
 async function submitWithMap(postId: string, text: string, feud: Feud) {
   const id = postId as `t3_${string}`;
   try {
-    const png = await feud.mapPng();
-    const { mediaUrl } = await media.upload({ url: `data:image/png;base64,${png.toString('base64')}`, type: 'image' });
+    const mediaUrl = await uploadPng(await feud.mapPng());
     return await reddit.submitComment({ id, richtext: markdownToRichtext(text, mediaUrl), runAs: 'APP' });
   } catch (error) {
     console.error('Could not attach the map, posting the results without it', error);
     return reddit.submitComment({ id, text, runAs: 'APP' });
   }
+}
+
+/** Puts a PNG on Reddit's media host and returns its URL. */
+async function uploadPng(png: Buffer): Promise<string> {
+  const { mediaUrl } = await media.upload({ url: `data:image/png;base64,${png.toString('base64')}`, type: 'image' });
+  return mediaUrl;
 }
 
 /** Turns the results Markdown (a bold headline, a list, a closing line) into rich text with the map after the headline. */
@@ -93,6 +98,27 @@ function markdownToRichtext(text: string, mediaUrl: string): RichTextBuilder {
   return rt;
 }
 
+/** The weekly post with the week's islands in a grid. If the picture fails, the table still goes up. */
+async function submitWeek(subredditName: string, title: string, body: string, week: number, board: WeekRow[]) {
+  try {
+    const grid = await weekMapPng(redis, week);
+    if (!grid) throw new Error('No closed days this week');
+    const mediaUrl = await uploadPng(grid);
+    const richtext = new RichTextBuilder()
+      .paragraph((p) => { p.text({ text: 'Seven feuds, seven islands. Here is how the front moved this week, day by day.' }); })
+      .image({ mediaUrl, caption: `Week ${week}, one island per day, in order` })
+      .heading({ level: 3 }, (h) => { h.rawText('The generals'); })
+      .list({ ordered: true }, (list) => {
+        board.forEach((r) => list.item((li) => { li.paragraph((p) => { p.text({ text: `u/${r.name}: ${r.hexes} ${r.hexes === 1 ? 'hex' : 'hexes'} taken, ${r.wins} ${r.wins === 1 ? 'day' : 'days'} won` }); }); }));
+      })
+      .paragraph((p) => { p.text({ text: `u/${board[0].name} is General of week ${week}. A new week starts at the next feud.` }); });
+    return await reddit.submitPost({ subredditName, title, richtext });
+  } catch (error) {
+    console.error('Could not post the week with its map, posting the table alone', error);
+    return reddit.submitPost({ subredditName, title, text: body });
+  }
+}
+
 const WEEKS_POSTED_KEY = 'feud:weeks-posted';
 /** The weekly table of generals, once per week, and the General's flair. */
 async function postWeek(week: number): Promise<void> {
@@ -102,7 +128,7 @@ async function postWeek(week: number): Promise<void> {
     if (!board.length) return; // nobody real fought: no table of bots
     const { title, body } = weekPost(week, board);
     const subredditName = context.subredditName ?? (await reddit.getCurrentSubreddit()).name;
-    const post = await reddit.submitPost({ subredditName, title, text: body });
+    const post = await submitWeek(subredditName, title, body, week, board);
     await redis.hSet(WEEKS_POSTED_KEY, { [String(week)]: post.id });
     await setFlair(board[0].name, await crownGeneral(redis, board[0].name, week));
   } catch (error) {
@@ -209,8 +235,19 @@ app.route('/api', api({
   username: async () => (await reddit.getCurrentUsername()) ?? null,
   setFlair,
   isModerator,
-  commentAsUser: async (postId, text) => {
-    await reddit.submitComment({ id: postId as `t3_${string}`, text, runAs: 'USER' });
+  commentAsUser: async (postId, text, map) => {
+    const id = postId as `t3_${string}`;
+    if (map) {
+      try {
+        const mediaUrl = await uploadPng(map);
+        const richtext = new RichTextBuilder().paragraph((p) => { p.text({ text }); }).image({ mediaUrl, caption: 'The island right now' });
+        await reddit.submitComment({ id, richtext, runAs: 'USER' });
+        return;
+      } catch (error) {
+        console.error('Could not share with the map, sharing the line alone', error);
+      }
+    }
+    await reddit.submitComment({ id, text, runAs: 'USER' });
   },
 }));
 

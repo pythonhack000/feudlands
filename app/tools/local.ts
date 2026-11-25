@@ -16,7 +16,7 @@ app.route('/api', api({
   store,
   postId: () => 'local',
   username: async (c) => getCookie(c, 'as') ?? 'local_player',
-  commentAsUser: async (postId, text) => { console.log(`[comment on ${postId}] ${text}`); },
+  commentAsUser: async (postId, text, map) => { console.log(`[comment on ${postId}] ${text}${map ? ` + map ${map.length} bytes` : ''}`); },
   isModerator: async (username) => username.startsWith('mod_'),
   setFlair: async (username, record) => { console.log(`[flair u/${username}] ${flairText(record)}`); },
 }));

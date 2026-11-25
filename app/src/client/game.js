@@ -889,7 +889,7 @@ async function shareLine(statusEl, button) {
   button.disabled = true;
   try {
     const { text } = await api('share', {});
-    statusEl.textContent = `Posted under the feud: \u201c${text}\u201d`;
+    statusEl.textContent = `Posted under the feud with the map: \u201c${text}\u201d`;
   } catch (error) {
     statusEl.textContent = error.message;
     button.disabled = false;
@@ -924,7 +924,7 @@ function openMidnight() {
     <h2 style="color:${a === b ? C.ink : SIDES[win].ink}">${a === b ? 'The island is split, 50% to 50%' : `The ${SIDES[win].name.toLowerCase()} hold the island, ${pa}% to ${100 - pa}%`}</h2>
     <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${genStat.today ? `${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken` : 'Nobody yet. Take one hex and it\u2019s you.'}</small></div></div>
     <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
-    <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share as a comment</button><span role="status"></span></p>` : ''}</div></div>
+    <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share with the map</button><span role="status"></span></p>` : ''}</div></div>
     <h2>Week ${week.n}</h2>
     <p>Hexes taken by real fighters this week. After seven feuds the leader becomes General of the week, in their flair.</p>
     ${week.top.length ? `<ol class="week">${week.top.map((r) => `<li${r.name === myName ? ' class="me"' : ''}><span>${r.name === myName ? 'You' : 'u/' + esc(r.name)}</span><small>${r.hexes} ${r.hexes === 1 ? 'hex' : 'hexes'}, ${r.wins} ${r.wins === 1 ? 'win' : 'wins'}</small></li>`).join('')}</ol>` : '<p><em>Nobody has taken a hex this week yet. The first one leads.</em></p>'}

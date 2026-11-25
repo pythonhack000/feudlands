@@ -1,7 +1,8 @@
 // The shared war: one island per post, stored as an ordered log of moves.
 // Every client replays the same log onto the same seeded island, so everyone sees the same map.
 import { isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
-import { islandPng } from './mapImage.ts';
+import { islandPng, weekGridPng } from './mapImage.ts';
+import type { Island } from '../shared/island.ts';
 import {
   cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX, WEEK_DAYS, weekOf,
   type Argument, type FeudInfo, type FighterRecord, type LastTime, type Move, type WeekRow, type NewMove, type Side, type State,
@@ -136,7 +137,7 @@ export async function creditMaker(store: Store, topic: Topic, day: number): Prom
 }
 
 // ---------- the week: hexes and wins add up over seven days, and the best fighter is its General ----------
-const weekKeys = (week: number) => ({ hexes: `feud:week:${week}:hexes`, wins: `feud:week:${week}:wins` });
+const weekKeys = (week: number) => ({ hexes: `feud:week:${week}:hexes`, wins: `feud:week:${week}:wins`, days: `feud:week:${week}:days` });
 const WEEK_BOARD_SIZE = 10;
 
 export async function weekBoard(store: Store, week: number, size = WEEK_BOARD_SIZE): Promise<WeekRow[]> {
@@ -166,6 +167,14 @@ export function weekPost(week: number, board: WeekRow[]): { title: string; body:
       `u/${board[0].name} is General of week ${week}. A new week starts at the next feud.`,
     ].join('\n'),
   };
+}
+
+/** The week's islands, each as it stood at its midnight, in day order, as one picture. Null before any day closed. */
+export async function weekMapPng(store: Store, week: number): Promise<Buffer | null> {
+  const days = Object.entries(await store.hGetAll(weekKeys(week).days)).sort((x, y) => Number(x[0]) - Number(y[0]));
+  if (!days.length) return null;
+  const islands = await Promise.all(days.map(([, post]) => new Feud(store, post, null).island()));
+  return weekGridPng(islands);
 }
 
 /** Names the week's General in their record, for the flair. */
@@ -340,14 +349,20 @@ export class Feud {
   /** Adds the day's hexes and wins to the week. Only real fighters count; the crowd never makes a board. */
   async addToWeek(r: Results, winners: string[]): Promise<void> {
     const k = weekKeys(weekOf(r.feud.day));
+    await this.store.hSet(k.days, { [String(r.feud.day)]: this.post });
     for (const [name, n] of Object.entries(r.hexes)) if (n > 0 && !isCrowd(name)) await this.store.hIncrBy(k.hexes, name, n);
     for (const name of winners) await this.store.hIncrBy(k.wins, name, 1);
   }
 
+  /** The island at the end of the log. */
+  async island(): Promise<Island> {
+    const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
+    return tallyDay(day, moves.map((m) => JSON.parse(m.member) as Move)).cells;
+  }
+
   /** The island at the end of the log, as a PNG. */
   async mapPng(): Promise<Buffer> {
-    const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
-    return islandPng(tallyDay(day, moves.map((m) => JSON.parse(m.member) as Move)).cells);
+    return islandPng(await this.island());
   }
 
   /** Files today's result under its topic, so the next time it comes round it's a rematch. */
