@@ -1,7 +1,7 @@
 // The war's sounds, synthesised with Web Audio: no files to load, nothing to license.
 // Ink and wood for building, steel for charges, a drum and horn for captures, the sea underneath.
 const STORE_KEY = 'feudlands.sound';
-const MASTER = 0.55, SEA_LEVEL = 0.05;
+const MASTER = 0.55, SEA_LEVEL = 0.018; // the sea stays a whisper: louder, it reads as a hum
 
 let ctx = null, master = null, sea = null;
 // Offline rendering (for the trailer) schedules sounds at a moment in the future instead of right now.
@@ -144,12 +144,12 @@ export function bell() {
 }
 
 /** Renders a list of sounds into an offline context, for a soundtrack: [{ name, args, at }] with `at` in seconds. */
-export async function renderOffline(events, seconds, sampleRate = 44100) {
+export async function renderOffline(events, seconds, { sampleRate = 44100, withSea = false } = {}) {
   const was = { ctx, master, sea, enabled };
   ctx = new OfflineAudioContext(2, Math.ceil(seconds * sampleRate), sampleRate);
   master = ctx.createGain(); master.gain.value = MASTER; master.connect(ctx.destination);
   enabled = true; offset = 0;
-  startSea();
+  if (withSea) startSea();
   const play = { build, capture, clash, verdict, tick, bell };
   for (const e of events) { offset = e.at; play[e.name](...e.args); }
   offset = 0;
