@@ -24,6 +24,8 @@ app.use('/*', serveStatic({ root: './dist/client' }));
 
 const local = () => new Feud(store, 'local', null);
 app.get('/local/results', async (c) => c.text(resultsComment(await local().results(), await resolveTopic(store, await local().winner()))));
+// What midnight would post: the day's GIF and the results text, exactly as the server makes them.
+app.get('/local/day.gif', async (c) => c.body(new Uint8Array(await local().dayGif()), 200, { 'content-type': 'image/gif' }));
 // Switch the local feud's topic before anyone opens it: /local/open?topic=pineapple&day=13
 app.get('/local/open', async (c) => { await Feud.open(store, 'local', c.req.query('topic') ?? 'cats-dogs', Number(c.req.query('day') ?? 1)); return c.text('ok'); });
 

@@ -2,6 +2,8 @@
 
 A daily war over a hand-drawn island, played inside a Reddit post. Each day has one feud with two sides (cats or dogs, tabs or spaces). The whole subreddit fights for the same island, and the best arguments in the war council become the battle cries that win hexes.
 
+**Play it:** [r/feudlands_dev](https://www.reddit.com/r/feudlands_dev/comments/1y4sw8n/feudlands_day_1_cats_or_dogs_pick_a_side_and_take/) · **Watch:** [trailer](https://youtu.be/jpMhNrNWPU4), [45-second Short](https://youtube.com/shorts/i0as6VDRdhA)
+
 Built with [Devvit Web](https://developers.reddit.com/) for Reddit's Game of the Day hackathon.
 
 ![The island mid-battle](https://raw.githubusercontent.com/pythonhack000/feudlands/main/docs/media/6-battle.png)
