@@ -542,7 +542,7 @@ async function submit(path, body) {
   }
 }
 // ---------- replay the day: the whole log again on the map, from the morning, then back to now ----------
-const REPLAY_MS = 9000, REPLAY_STEP_MAX_MS = 220;
+const REPLAY_MS = 7000, REPLAY_STEP_MAX_MS = 200;
 let replayingDay = false;
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 async function replayDay() {
