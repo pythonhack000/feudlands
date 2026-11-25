@@ -46,7 +46,8 @@
     "redis": true,
     "reddit": {
       "enable": true
-    }
+    },
+    "media": true
   },
   "dev": {
     "subreddit": "feudlands_dev"

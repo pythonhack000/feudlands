@@ -1,9 +1,10 @@
 // The shared war: one island per post, stored as an ordered log of moves.
 // Every client replays the same log onto the same seeded island, so everyone sees the same map.
 import { isCrowd, NAMES, sideOf, tallyDay } from '../shared/island.ts';
+import { islandPng } from './mapImage.ts';
 import {
-  cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX,
-  type Argument, type FeudInfo, type FighterRecord, type LastTime, type Move, type NewMove, type Side, type State,
+  cryPower, isSide, LEGACY_DAY, MAP_REACH, TEXT_MAX, WEEK_DAYS, weekOf,
+  type Argument, type FeudInfo, type FighterRecord, type LastTime, type Move, type WeekRow, type NewMove, type Side, type State,
 } from '../shared/rules.ts';
 import { builtinTopic, candidatesAfter, DEFAULT_TOPIC, SUGGEST, type Topic } from '../shared/topics.ts';
 
@@ -121,6 +122,7 @@ export function flairText(r: FighterRecord): string {
   const parts = r.streak ? [`${r.streak} ${r.streak === 1 ? 'day' : 'days'} at war`] : [];
   if (r.wins) parts.push(`${r.wins} ${r.wins === 1 ? 'win' : 'wins'}`);
   if (r.made) parts.push(r.made === 1 ? 'feud maker' : `feud maker x${r.made}`);
+  if (r.general) parts.push(`General of week ${r.general}`);
   return `Feudlands: ${parts.join(', ')}`;
 }
 
@@ -131,6 +133,47 @@ export async function creditMaker(store: Store, topic: Topic, day: number): Prom
   const record = { ...(before ?? { streak: 0, best: 0, wins: 0, lastDay: day - 1 }), made: (before?.made ?? 0) + 1 };
   await store.hSet(FIGHTERS_KEY, { [topic.by]: JSON.stringify(record) });
   return { name: topic.by, record };
+}
+
+// ---------- the week: hexes and wins add up over seven days, and the best fighter is its General ----------
+const weekKeys = (week: number) => ({ hexes: `feud:week:${week}:hexes`, wins: `feud:week:${week}:wins` });
+const WEEK_BOARD_SIZE = 10;
+
+export async function weekBoard(store: Store, week: number, size = WEEK_BOARD_SIZE): Promise<WeekRow[]> {
+  const k = weekKeys(week);
+  const [hexes, wins] = await Promise.all([store.hGetAll(k.hexes), store.hGetAll(k.wins)]);
+  return [...new Set([...Object.keys(hexes), ...Object.keys(wins)])]
+    .map((name) => ({ name, hexes: Number(hexes[name] ?? 0), wins: Number(wins[name] ?? 0) }))
+    .sort((x, y) => y.hexes - x.hexes || y.wins - x.wins || x.name.localeCompare(y.name))
+    .slice(0, size);
+}
+
+/** True on the day that closes a week. */
+export const endsWeek = (day: number): boolean => day % WEEK_DAYS === 0;
+
+/** The weekly post: the table of generals. Plain Markdown. */
+export function weekPost(week: number, board: WeekRow[]): { title: string; body: string } {
+  const rows = board.map((r, i) => `| ${i + 1} | u/${r.name} | ${r.hexes} | ${r.wins} |`);
+  return {
+    title: `Feudlands, week ${week}: the generals`,
+    body: [
+      `Seven feuds are done. Here's who took the most of the island this week.`,
+      '',
+      '| | Fighter | Hexes taken | Days won |',
+      '|---|---|---|---|',
+      ...rows,
+      '',
+      `u/${board[0].name} is General of week ${week}. A new week starts at the next feud.`,
+    ].join('\n'),
+  };
+}
+
+/** Names the week's General in their record, for the flair. */
+export async function crownGeneral(store: Store, name: string, week: number): Promise<FighterRecord> {
+  const before = await recordOf(store, name);
+  const record = { ...(before ?? { streak: 0, best: 0, wins: 0, lastDay: 0 }), general: week };
+  await store.hSet(FIGHTERS_KEY, { [name]: JSON.stringify(record) });
+  return record;
 }
 
 const historyKey = (topicId: string) => `feud:history:${topicId}`;
@@ -252,7 +295,8 @@ export class Feud {
     await this.seed();
     await this.tickBots();
     if (this.user) await this.store.zAdd(this.k.seen, { member: this.user, score: this.now });
-    const [feud, next, record, moves, args, myVotes, sides, here, botCount] = await Promise.all([
+    const day = (await this.info()).day;
+    const [feud, next, record, moves, args, myVotes, sides, here, botCount, top] = await Promise.all([
       this.info(),
       this.next(),
       this.user ? recordOf(this.store, this.user) : Promise.resolve(null),
@@ -262,12 +306,14 @@ export class Feud {
       this.store.hGetAll(this.k.sides),
       this.store.zRange(this.k.seen, this.now - HERE_WINDOW_MS, this.now, { by: 'score' }),
       this.store.get(this.k.botCount),
+      weekBoard(this.store, weekOf(day), 5),
     ]);
     const side = this.user ? sides[this.user] : undefined;
     const sworn = { a: 0, b: 0 };
     Object.values(sides).forEach((s) => { if (isSide(s)) sworn[s]++; });
     return {
       feud, next,
+      week: { n: weekOf(day), top },
       me: { name: this.user, side: isSide(side) ? side : null, record },
       sworn,
       moves: moves.map((m) => JSON.parse(m.member) as Move),
@@ -289,6 +335,19 @@ export class Feud {
     const record = { streak, best: Math.max(streak, before?.best ?? 0), wins: before?.wins ?? 0, lastDay: day };
     await this.store.hSet(FIGHTERS_KEY, { [user]: JSON.stringify(record) });
     return record;
+  }
+
+  /** Adds the day's hexes and wins to the week. Only real fighters count; the crowd never makes a board. */
+  async addToWeek(r: Results, winners: string[]): Promise<void> {
+    const k = weekKeys(weekOf(r.feud.day));
+    for (const [name, n] of Object.entries(r.hexes)) if (n > 0 && !isCrowd(name)) await this.store.hIncrBy(k.hexes, name, n);
+    for (const name of winners) await this.store.hIncrBy(k.wins, name, 1);
+  }
+
+  /** The island at the end of the log, as a PNG. */
+  async mapPng(): Promise<Buffer> {
+    const [{ day }, moves] = await Promise.all([this.info(), this.store.zRange(this.k.moves, 0, LAST_SEQ, { by: 'score' })]);
+    return islandPng(tallyDay(day, moves.map((m) => JSON.parse(m.member) as Move)).cells);
   }
 
   /** Files today's result under its topic, so the next time it comes round it's a rematch. */

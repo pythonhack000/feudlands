@@ -435,6 +435,7 @@ function renderSuggest(box, ballotBox) {
 // ---------- the shared war: the server keeps the log, every client replays it ----------
 const POLL_MS = 3000;
 let myRecord = null; // your run across days, from the server
+let week = { n: 1, top: [] }; // this week's generals so far
 let myName = null, lastSeq = 0, replaying = false, busy = false, quietShown = false;
 async function api(path, body) {
   let res;
@@ -476,6 +477,7 @@ function spend(kind, gained) {
 function applyState(state) {
   myName = state.me.name;
   myRecord = state.me.record;
+  week = state.week;
   setBallot(state.next);
   setCouncil(state.args, state.myVotes);
   const results = state.moves.filter((m) => m.seq > lastSeq).map((m) => ({ m, gained: applyMove(m) }));
@@ -923,6 +925,9 @@ function openMidnight() {
     <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${genStat.today ? `${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken` : 'Nobody yet. Take one hex and it\u2019s you.'}</small></div></div>
     <div class="arg" style="border-color:${SIDES[cry.side].ink}"><div style="flex:1"><q>${cry.text.replace(/[<>&]/g, '')}</q><small>Cry of the day, by ${cry.by === 'you' ? 'you' : titled(cry.by)}${cry.taken ? `, took ${cry.taken} ${cry.taken === 1 ? 'hex' : 'hexes'}` : ''}</small></div></div>
     <div class="arg" style="border-color:${mySide ? SIDES[mySide].ink : C.ink}"><div style="flex:1"><q>${day.title}</q><small>${day.line}</small>${day.share ? `<p class="brag"><button type="button" class="vote">Share as a comment</button><span role="status"></span></p>` : ''}</div></div>
+    <h2>Week ${week.n}</h2>
+    <p>Hexes taken by real fighters this week. After seven feuds the leader becomes General of the week, in their flair.</p>
+    ${week.top.length ? `<ol class="week">${week.top.map((r) => `<li${r.name === myName ? ' class="me"' : ''}><span>${r.name === myName ? 'You' : 'u/' + esc(r.name)}</span><small>${r.hexes} ${r.hexes === 1 ? 'hex' : 'hexes'}, ${r.wins} ${r.wins === 1 ? 'win' : 'wins'}</small></li>`).join('')}</ol>` : '<p><em>Nobody has taken a hex this week yet. The first one leads.</em></p>'}
     <h2>Tomorrow's feud</h2>
     <p>Vote for what the island fights over tomorrow. The winner goes up as a new post at midnight.</p>
     <div class="ballot"></div><p class="councilNote" role="status"></p>

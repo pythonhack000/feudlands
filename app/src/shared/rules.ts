@@ -11,7 +11,12 @@ export const LEGACY_DAY = 12;
 export type FeudInfo = { day: number; topic: string; question: string; sides: Record<Side, string>; glyphs: Record<Side, string> | null; by: string | null; rematch: LastTime | null };
 
 /** A fighter's run across days: consecutive days at war, and days their side won. */
-export type FighterRecord = { streak: number; best: number; wins: number; lastDay: number; made?: number };
+export type FighterRecord = { streak: number; best: number; wins: number; lastDay: number; made?: number; general?: number };
+
+/** A week runs seven feud days: days 1-7 are week 1. */
+export const WEEK_DAYS = 7;
+export const weekOf = (day: number): number => Math.ceil(day / WEEK_DAYS);
+export type WeekRow = { name: string; hexes: number; wins: number };
 
 /** How this topic went the last time it was fought, for a rematch. */
 export type LastTime = { day: number; a: number; b: number };
@@ -42,6 +47,8 @@ export type State = {
   /** Tomorrow's ballot. */
   next: { choices: { id: string; question: string; votes: number; by: string | null }[]; mine: string | null; suggested: boolean };
   me: { name: string | null; side: Side | null; record: FighterRecord | null };
+  /** This week's generals so far, best first. */
+  week: { n: number; top: WeekRow[] };
   moves: Move[];
   args: Argument[];
   myVotes: Record<string, number>;

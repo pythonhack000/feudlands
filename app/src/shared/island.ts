@@ -154,6 +154,8 @@ export interface DayTally {
   hexes: Record<string, number>;
   /** Hexes taken today, per battle cry. */
   cries: Record<string, number>;
+  /** The island as it stands at the end of the log. */
+  cells: Island;
 }
 /** The whole day from the log: who holds what, and who took it. */
 export function tallyDay(day: number, moves: Move[]): DayTally {
@@ -166,5 +168,5 @@ export function tallyDay(day: number, moves: Move[]): DayTally {
   }
   let a = 0, b = 0;
   for (const c of cells.values()) { if (c.side === 'a') a++; if (c.side === 'b') b++; }
-  return { a, b, hexes, cries };
+  return { a, b, hexes, cries, cells };
 }

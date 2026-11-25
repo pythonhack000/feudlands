@@ -1,11 +1,13 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
-import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
+import { context, createServer, getServerPort, media, reddit, redis, RichTextBuilder } from '@devvit/web/server';
 import type { TriggerResponse, UiResponse } from '@devvit/web/shared';
 import { api } from './api.ts';
-import { ballotNotice, creditMaker, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment } from './feud.ts';
+import {
+  ballotNotice, creditMaker, crownGeneral, endsWeek, Feud, flairText, POSTS_KEY, resolveTopic, resultsComment, weekBoard, weekPost,
+} from './feud.ts';
 import { DEFAULT_TOPIC, type Topic } from '../shared/topics.ts';
-import type { FighterRecord } from '../shared/rules.ts';
+import { weekOf, type FighterRecord } from '../shared/rules.ts';
 
 /** Feuds older than this have had their midnight. */
 const OPEN_FOR_MS = 36 * 60 * 60 * 1000;
@@ -53,12 +55,60 @@ async function closeDay(postId: string, tomorrow: Topic | null): Promise<boolean
   const doneKey = `feud:${postId}:closed`;
   if (await redis.get(doneKey)) return false;
   const feud = new Feud(redis, postId, null), results = await feud.results();
-  const comment = await reddit.submitComment({ id: postId as `t3_${string}`, text: resultsComment(results, tomorrow), runAs: 'APP' });
+  const text = resultsComment(results, tomorrow);
+  const comment = await submitWithMap(postId, text, feud);
   await comment.distinguish(true);
   await redis.set(doneKey, comment.id);
   await feud.remember(results);
-  for (const { name, record } of await feud.creditWinners(results)) await setFlair(name, record);
+  const winners = await feud.creditWinners(results);
+  for (const { name, record } of winners) await setFlair(name, record);
+  await feud.addToWeek(results, winners.map((w) => w.name));
+  if (endsWeek(results.feud.day)) await postWeek(weekOf(results.feud.day));
   return true;
+}
+
+/** The results comment with the island drawn under it. If the picture fails, the words still go up. */
+async function submitWithMap(postId: string, text: string, feud: Feud) {
+  const id = postId as `t3_${string}`;
+  try {
+    const png = await feud.mapPng();
+    const { mediaUrl } = await media.upload({ url: `data:image/png;base64,${png.toString('base64')}`, type: 'image' });
+    return await reddit.submitComment({ id, richtext: markdownToRichtext(text, mediaUrl), runAs: 'APP' });
+  } catch (error) {
+    console.error('Could not attach the map, posting the results without it', error);
+    return reddit.submitComment({ id, text, runAs: 'APP' });
+  }
+}
+
+/** Turns the results Markdown (a bold headline, a list, a closing line) into rich text with the map after the headline. */
+function markdownToRichtext(text: string, mediaUrl: string): RichTextBuilder {
+  const plainText = (line: string) => line.replace(/\*\*/g, '');
+  const [head, ...rest] = text.split('\n');
+  const items = rest.filter((l) => l.startsWith('- ')).map((l) => plainText(l.slice(2)));
+  const after = rest.filter((l) => l.trim() && !l.startsWith('- '));
+  const rt = new RichTextBuilder().heading({ level: 3 }, (h) => { h.rawText(plainText(head)); });
+  rt.image({ mediaUrl, caption: 'The island at midnight' });
+  if (items.length) rt.list({ ordered: false }, (list) => { items.forEach((item) => list.item((li) => { li.paragraph((p) => { p.text({ text: item }); }); })); });
+  after.forEach((line) => rt.paragraph((p) => { p.text({ text: plainText(line) }); }));
+  return rt;
+}
+
+const WEEKS_POSTED_KEY = 'feud:weeks-posted';
+/** The weekly table of generals, once per week, and the General's flair. */
+async function postWeek(week: number): Promise<void> {
+  if (!(await redis.hSetNX(WEEKS_POSTED_KEY, String(week), 'posting'))) return;
+  try {
+    const board = await weekBoard(redis, week);
+    if (!board.length) return; // nobody real fought: no table of bots
+    const { title, body } = weekPost(week, board);
+    const subredditName = context.subredditName ?? (await reddit.getCurrentSubreddit()).name;
+    const post = await reddit.submitPost({ subredditName, title, text: body });
+    await redis.hSet(WEEKS_POSTED_KEY, { [String(week)]: post.id });
+    await setFlair(board[0].name, await crownGeneral(redis, board[0].name, week));
+  } catch (error) {
+    await redis.hDel(WEEKS_POSTED_KEY, [String(week)]);
+    console.error(`Could not post week ${week}`, error);
+  }
 }
 
 async function isModerator(username: string): Promise<boolean> {

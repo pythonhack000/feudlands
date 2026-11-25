@@ -305,3 +305,35 @@ test('a topic fought before comes back as a rematch, with the last result in the
 test('flair grows with streak, wins and feuds made', () => {
   assert.equal(flairText({ streak: 3, best: 3, wins: 2, lastDay: 9, made: 2 }), 'Feudlands: 3 days at war, 2 wins, feud maker x2');
 });
+
+import { crownGeneral, endsWeek, weekBoard, weekPost } from '../src/server/feud.ts';
+import { inflateSync } from 'node:zlib';
+
+test('the week adds up real fighters\' hexes and wins, and its leader becomes General', async () => {
+  const store = memoryStore();
+  await Feud.open(store, 'd1', 'cats-dogs', 1);
+  await Feud.open(store, 'd2', 'pineapple', 2);
+  const base = await new Feud(store, 'd1', null, T0).results();
+  await new Feud(store, 'd1', null, T0).addToWeek({ ...base, hexes: { ann: 3, bob: 1, quietfox: 9 } }, ['ann']);
+  const base2 = await new Feud(store, 'd2', null, T0).results();
+  await new Feud(store, 'd2', null, T0).addToWeek({ ...base2, hexes: { bob: 4 } }, ['bob']);
+  const board = await weekBoard(store, 1);
+  assert.deepEqual(board, [{ name: 'bob', hexes: 5, wins: 1 }, { name: 'ann', hexes: 3, wins: 1 }]); // the crowd never counts
+  assert.equal(endsWeek(7), true); assert.equal(endsWeek(6), false); assert.equal(endsWeek(14), true);
+  const { title, body } = weekPost(1, board);
+  assert.equal(title, 'Feudlands, week 1: the generals');
+  assert.match(body, /\| 1 \| u\/bob \| 5 \| 1 \|/);
+  assert.match(body, /u\/bob is General of week 1/);
+  assert.equal(flairText(await crownGeneral(store, 'bob', 1)), 'Feudlands: General of week 1');
+  assert.deepEqual((await new Feud(store, 'd2', 'bob', T0).state(0)).week, { n: 1, top: board });
+});
+
+test('the server draws the island as a real PNG', async () => {
+  const store = memoryStore();
+  for (let i = 0; i < 10; i++) await new Feud(store, 'p', null, T0 + i * BOT_TICK_MS).state(0);
+  const png = await new Feud(store, 'p', null, T0).mapPng();
+  assert.deepEqual([...png.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(png.readUInt32BE(16), 720); assert.equal(png.readUInt32BE(20), 600);
+  const idat = png.indexOf('IDAT'), len = png.readUInt32BE(idat - 4);
+  assert.equal(inflateSync(png.subarray(idat + 4, idat + 4 + len)).length, (720 * 3 + 1) * 600);
+});
