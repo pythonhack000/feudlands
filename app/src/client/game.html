@@ -36,6 +36,7 @@
   .week li span { margin-right: 8px; }
   .week li small { font-style: italic; color: var(--ink-soft); }
   .week li.me span { font-weight: 600; }
+  .sound-toggle { font: inherit; font-size: 13px; font-style: italic; color: var(--ink-soft); background: none; border: 0; border-bottom: 1px solid currentColor; padding: 0; margin-left: 8px; cursor: pointer; }
   .ballot { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; }
   .ballot .choice > button:first-child { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: inherit; text-align: left; color: var(--ink); background: none; border: 1px solid rgba(58,42,28,.35); padding: 8px 12px; cursor: pointer; }
   .ballot .choice > button[aria-pressed="true"] { border-color: var(--ink); background: rgba(58,42,28,.07); }
@@ -129,7 +130,7 @@
 <body>
 <main>
   <header>
-    <div class="top"><span class="brand">Feudlands</span><span class="day">Day <span id="dayNo">12</span>, <span id="here">1</span> at war</span></div>
+    <div class="top"><span class="brand">Feudlands</span><span class="day">Day <span id="dayNo">12</span>, <span id="here">1</span> at war <button type="button" id="toggleSound" class="sound-toggle">Sound on</button></span></div>
     <h1 id="question">Cats or dogs?</h1>
     <p class="feud-by" id="feudBy" hidden></p>
     <div class="tug">

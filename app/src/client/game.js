@@ -1,11 +1,13 @@
 import * as I from '../shared/island.ts';
 import { CRY_VOTES, LEGACY_DAY } from '../shared/rules.ts';
+import * as sound from './sound.js';
 
 const { rng, hash, DIRS, NAMES, sideOf, isFree, STRENGTH, HOME } = I;
 
 const C = { ink: '#3a2a1c', inkSoft: '#7a6347', sea: '#6f9a95', land: '#e6d3a3', paper: '#efe3c8' };
 const SIDES = { a: { name: 'Cats', ink: '#2f5d8a' }, b: { name: 'Dogs', ink: '#b5452f' } };
 let TODAY = LEGACY_DAY; // the post's day, set when the feud loads
+const VERDICT_MS = 900; // the verdict sounds as 'captured' or 'held' is drawn
 const INK_MS = 700, LABEL_MS = 2600, BATTLE_MS = 3400;
 const battles = [];
 
@@ -279,7 +281,11 @@ function assault(c, side, by, cry) {
   const now = replaying ? -Infinity : performance.now();
   for (let i = battles.length - 1; i >= 0; i--) if (performance.now() - battles[i].at > BATTLE_MS) battles.splice(i, 1);
   const o = I.charge(cells, c, side, by, cryPower(cry), cry && cry.id ? cry.id : null);
-  if (!replaying) battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won: o.won, seed: Math.floor(now) });
+  if (!replaying) {
+    battles.push({ c, side, at: now, cry, rebut: rebuttalOf(cry), won: o.won, seed: Math.floor(now) });
+    sound.clash(by === 'you');
+    setTimeout(() => sound.verdict(o.won, by === 'you'), VERDICT_MS);
+  }
   if (o.won) {
     Object.assign(c, { flipAt: now + 900, label: null });
     o.flipped.forEach((f) => Object.assign(f, { flipAt: now + 1200, label: 'captured' }));
@@ -324,6 +330,7 @@ function move(c, kind, side, by) {
   Object.assign(c, { bornAt: now, label: titled(by) });
   flipped.forEach((f) => Object.assign(f, { flipAt: now + 350, label: 'captured' }));
   credit(by, flipped.length);
+  if (!replaying) { if (flipped.length) sound.capture(flipped.length, by === 'you'); else sound.build(by === 'you'); }
   const who = by === 'you' ? 'You' : titled(by);
   log(flipped.length ? `<span>${who} took ${flipped.length} from the ${SIDES[side === 'a' ? 'b' : 'a'].name.toLowerCase()}</span><em>+${1 + flipped.length * 2}</em>` : `<span>${who} raised a ${KINDS[kind].name.toLowerCase()}</span><em>+1</em>`, side);
   tally(); showRank(); animate();
@@ -392,6 +399,7 @@ function renderBallot(box) {
     b.innerHTML = `<span>${esc(choice.question)}${choice.by ? `<small> suggested by ${choice.by === myName ? 'you' : 'u/' + esc(choice.by)}</small>` : ''}</span><small>${choice.votes} ${choice.votes === 1 ? 'vote' : 'votes'}${ballot.mine === choice.id ? ', yours' : ''}${own ? ', yours to campaign for' : ''}</small>`;
     b.onclick = async () => {
       const note = box.nextElementSibling;
+      sound.tick();
       try { applyState(await api(`next?${after()}`, { topic: choice.id })); renderBallot(box); note.textContent = 'Your vote is in. You can change it until midnight.'; }
       catch (error) { note.textContent = error.message; }
     };
@@ -521,7 +529,7 @@ async function replayDay() {
   try {
     for (let i = 0; i < moves.length; i++) {
       const o = I.play(cells, moves[i]), t = performance.now();
-      if (o) { o.c.bornAt = t; o.flipped.forEach((f) => { f.flipAt = t; }); }
+      if (o) { o.c.bornAt = t; o.flipped.forEach((f) => { f.flipAt = t; }); sound.build(false); }
       statusEl.textContent = `Replaying the day: move ${i + 1} of ${moves.length}`;
       tally(); draw();
       await pause(step);
@@ -647,6 +655,11 @@ function joinSide(side) {
   document.getElementById('skipTraining').onclick = () => advanceLesson(TRAINED);
   coach(); renderCards(); draw();
 }
+// Sound sits in the top line, beside the day, so the links row keeps its room.
+const soundBtn = document.getElementById('toggleSound');
+const labelSound = () => { soundBtn.textContent = sound.soundOn() ? 'Sound on' : 'Sound off'; soundBtn.setAttribute('aria-pressed', String(sound.soundOn())); };
+soundBtn.onclick = () => { sound.setSound(!sound.soundOn()); labelSound(); };
+labelSound();
 // The header only offers what you've unlocked.
 function showHeaderLinks() {
   // Short labels, so every link fits on one line beside the map and on a phone.
@@ -709,6 +722,7 @@ function syncRally() {
 }
 // A vote or a post in the council. True when the server took it; the error shows in the sheet otherwise.
 async function council(path, body) {
+  sound.tick();
   try {
     const data = await api(`${path}?${after()}`, body);
     applyState(path === 'argue' ? data.state : data);
@@ -944,6 +958,7 @@ function yourDay(a, b, win) {
   return { title: 'Your day', line: tail, share: mine ? `I took ${hexes(mine)} for the ${name}. ${sign}` : null };
 }
 function openMidnight() {
+  sound.bell();
   hover = null; picked = null; draw();
   let a = 0, b = 0; for (const c of cells.values()) { if (c.side === 'a') a++; if (c.side === 'b') b++; }
   const win = a >= b ? 'a' : 'b', pa = Math.round((Math.max(a, b) / Math.max(1, a + b)) * 100);
@@ -994,6 +1009,7 @@ async function start() {
   tally(); renderCards(); draw();
   setTimeout(poll, POLL_MS);
 }
+sound.unlockOnFirstTap();
 document.fonts.ready.then(start);
 // Test hook: ?debug exposes the board so scripted playthroughs can find hexes.
 if (new URLSearchParams(location.search).has('debug')) window.feud = { I, cells, center, lessonHexes, canCharge, isFree, hand, get lesson() { return lesson; }, get mySide() { return mySide; }, get seq() { return lastSeq; }, get points() { return myPoints; } };
