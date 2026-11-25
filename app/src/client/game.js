@@ -967,7 +967,7 @@ function openMidnight() {
   const cry = [...args].filter((x) => x.taken).sort((x, y) => y.taken - x.taken)[0] || [...args].sort((x, y) => y.votes - x.votes)[0];
   const day = yourDay(a, b, win);
   const el = sheet(`<header><h2>Midnight</h2><button class="close" type="button">Back to the war</button></header>
-    <p>At 00:00 UTC the war stops and this goes up as a pinned comment under the post.</p>
+    <p>The day so far. The war goes on until 00:00 UTC; then this is pinned under the post and tomorrow's feud goes up.</p>
     <img alt="The island at midnight" style="width:100%;border:1px solid rgba(58,42,28,.3)" src="${canvas.toDataURL('image/png')}" />
     <h2 style="color:${a === b ? C.ink : SIDES[win].ink}">${a === b ? 'The island is split, 50% to 50%' : `The ${SIDES[win].name.toLowerCase()} hold the island, ${pa}% to ${100 - pa}%`}</h2>
     <div class="arg" style="border-color:${C.ink}"><div style="flex:1"><q>General of the day</q><small>${genStat.today ? `${gen === 'you' ? 'You' : titled(gen)}, ${genStat.today} ${genStat.today === 1 ? 'hex' : 'hexes'} taken` : 'Nobody yet. Take one hex and it\u2019s you.'}</small></div></div>
