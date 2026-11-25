@@ -20,6 +20,7 @@ Feudlands is a daily war over hand-drawn islands. Each day has one feud with two
 - **Built to grow.** Each island keeps its own move log and its standing, so a new player downloads one island, not the whole war, and fleets never replay every log.
 - **A move log, not a board.** The server stores moves in order and validates them; clients replay the log. The crowd only moves while someone is watching, and the server hands every client the same seed, so the crowd's moves are identical everywhere.
 - **Pictures without a canvas.** Devvit's server has no image library, so the server paints the island pixel by pixel and writes the PNG and GIF files itself, with its own LZW encoder.
+- **Sound without files.** Wood and quill for building, steel for charges, a drum and horn for captures, a bell at midnight: all synthesised with Web Audio in the browser, and rendered offline for the trailer.
 - **Hand-drawn look.** Every line on the map is a seeded ink wobble with watercolour washes, set in IM Fell, so the island looks like an old map rather than a grid.
 
 ## Challenges we ran into
